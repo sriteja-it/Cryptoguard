@@ -49,7 +49,7 @@ app.use(express.json({
 
 // Simple CORS for dev: allow the frontend to call the API
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Origin', ' https://cryptoguard-11v0.onrender.com');
   res.header(
     'Access-Control-Allow-Headers',
     'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Admin-Token'

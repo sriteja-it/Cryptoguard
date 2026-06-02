@@ -1,5 +1,6 @@
-contributors: sriteja-it, patan-shehanaz
-deployed live link: https://cryptoguard-lovat.vercel.app/
+**contributors**: sriteja-it , patan-shehanaz
+<br>
+**deployed live link**: https://cryptoguard-lovat.vercel.app/
 
 # Dark Mode PQC Dashboard
 

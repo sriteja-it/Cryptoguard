@@ -47,13 +47,17 @@ app.use(express.json({
   },
 }));
 
-// Simple CORS for dev: allow the frontend to call the API
+// CORS — supports both local dev and production (Vercel frontend -> Render backend)
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : ['http://localhost:5173', 'http://localhost:4173'];
+
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header(
-    'Access-Control-Allow-Headers',
-    'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Admin-Token'
-  );
+  const origin = req.headers.origin;
+  if (!origin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*')) {
+    res.header('Access-Control-Allow-Origin', origin || '*');
+  }
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Admin-Token');
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
@@ -282,8 +286,6 @@ app.post('/api/audit', validateApiKey, applyRateLimit, async (req, res) => {
     const storedScan = await insertScan(scan);
 
     // increment usage
-    // BUG FIX: MongoDB driver v5+ returns the document directly from findOneAndUpdate,
-    // not wrapped in { value: doc }. Using usageUpdate directly.
     const updatedApiKey = await incrementApiKeyUsage(req.apiKeyEntry.id) || req.apiKeyEntry;
 
     return res.json({ scan: storedScan, analysis, usage: { count: updatedApiKey.usage_count ?? 0, quota: updatedApiKey.quota ?? null } });
@@ -352,12 +354,11 @@ app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) =>
     };
 
     await database.collection('api_keys').insertOne(doc);
-    // BUG FIX: Return plaintext exactly once at creation time so the client can save it.
-    // The hash is never exposed; the plaintext is only sent in this response and never stored.
+    // Do not return plaintext in API responses. Return key metadata and fingerprint only.
     const keyFingerprint = hashed.slice(0, 16);
     const safeDoc = { ...doc };
     delete safeDoc.hashed_key;
-    return res.json({ ok: true, apiKey: safeDoc, keyFingerprint, plaintext });
+    return res.json({ ok: true, apiKey: safeDoc, keyFingerprint });
   } catch (error) {
     console.error('create_key_failed', error);
     return res.status(500).json({ error: 'create_key_failed' });

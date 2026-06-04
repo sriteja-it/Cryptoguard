@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { motion } from "motion/react";
+import { motion } from "framer-motion"; // Adjusted to standard framer-motion import or keep your exact alias if configured
 import { Shield, Key, AlertTriangle, CheckCircle2, Clock3, ArrowRight, Sparkles, History } from "lucide-react";
 import BentoCard from "../components/BentoCard";
 import SkeletonCard from "../components/SkeletonCard";
@@ -137,21 +137,17 @@ export default function Dashboard() {
 
   const resultSummary = useMemo(() => {
     const risk = (result?.analysis?.riskLevel || "UNKNOWN").toString().toUpperCase();
-    // riskEngine has no summary field; build one from riskLevel
     const riskLabel = risk === "CRITICAL" ? "critical" : risk === "HIGH" ? "high" : risk === "MEDIUM" ? "moderate" : "low";
     const summary = `This host has ${riskLabel} quantum vulnerability. ${result?.analysis?.quantumVulnerable ? "Not quantum-safe." : "Quantum-safe algorithms may be present."}`;
     return { risk, summary };
   }, [result]);
 
   const scores = useMemo(() => {
-    // prefer backend-provided component scores when available
     const backendVuln = Number.isFinite(Number(result?.analysis?.vulnerabilityScore)) ? Number(result?.analysis?.vulnerabilityScore) : null;
     const backendQuantum = Number.isFinite(Number(result?.analysis?.breakdown?.quantumScore)) ? Number(result?.analysis?.breakdown?.quantumScore) : null;
     const backendClassical = Number.isFinite(Number(result?.analysis?.breakdown?.classicalScore)) ? Number(result?.analysis?.breakdown?.classicalScore) : null;
 
     const vulnerability = backendVuln !== null ? Math.max(0, Math.min(100, backendVuln)) : 95;
-
-    // compute fallback quantum/classical if backend didn't provide them
     const fallbackQuantum = Math.round(Math.max(0, Math.min(100, 100 - vulnerability)));
 
     const ks = Number(result?.scan?.certInfo?.publicKeySize || 0);
@@ -162,6 +158,27 @@ export default function Dashboard() {
 
     return { vulnerability, quantum, classical };
   }, [result]);
+
+  // Derived layout values parsed out safely for JSX cleanly outside the returned markup block
+  const certInfo = result?.scan?.certInfo || {};
+  const analysis = result?.analysis || {};
+  const riskLevel = (analysis.riskLevel || "UNKNOWN").toUpperCase();
+  const riskColor = riskLevel === "CRITICAL" ? "#FF4D4D" : riskLevel === "HIGH" ? "#FF8C00" : riskLevel === "MEDIUM" ? "#FFB84D" : "#00FF94";
+  const riskBg = riskLevel === "CRITICAL" ? "bg-[#FF4D4D]/20 border-[#FF4D4D]/30" : riskLevel === "HIGH" ? "bg-[#FF8C00]/20 border-[#FF8C00]/30" : riskLevel === "MEDIUM" ? "bg-[#FFB84D]/20 border-[#FFB84D]/30" : "bg-[#00FF94]/20 border-[#00FF94]/30";
+  const riskPriorityLabel = riskLevel === "CRITICAL" ? "CRITICAL PRIORITY" : riskLevel === "HIGH" ? "HIGH PRIORITY" : riskLevel === "MEDIUM" ? "MEDIUM PRIORITY" : "LOW PRIORITY";
+  const algo = certInfo.publicKeyType || "Unknown";
+  const keySize = certInfo.publicKeySize;
+  const tlsVersion = certInfo.tlsVersion || "Unknown";
+  const issuer = certInfo.issuer?.organizationName || certInfo.issuer?.commonName || "Unknown";
+  const subject = certInfo.subject?.commonName || result?.scan?.host || "Unknown";
+  const notAfter = certInfo.notAfter ? new Date(certInfo.notAfter) : null;
+  const daysLeft = notAfter ? Math.max(0, Math.ceil((notAfter.getTime() - Date.now()) / 86400000)) : null;
+  const expiryColor = daysLeft !== null ? (daysLeft <= 30 ? "#FF4D4D" : daysLeft <= 90 ? "#FFB84D" : "#00FF94") : "#00FF94";
+  const recommendations = analysis.recommendations || [];
+  const reasons = analysis.reasons || [];
+  const vulnScore = analysis.vulnerabilityScore ?? scores.vulnerability;
+  const classicalScore = analysis.breakdown?.classicalScore ?? scores.classical;
+  const quantumScore = analysis.breakdown?.quantumScore ?? scores.quantum;
 
   return (
     <div className="p-4 md:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
@@ -194,7 +211,9 @@ export default function Dashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-gray-400">Current mode</p>
-                <p className="text-sm font-semibold text-white">{state === "scanning" ? "Scanning" : state === "result" ? "Results ready" : state === "error" ? "Action needed" : "Ready to scan"}</p>
+                <p className="text-sm font-semibold text-white">
+                  {state === "scanning" ? "Scanning" : state === "result" ? "Results ready" : state === "error" ? "Action needed" : "Ready to scan"}
+                </p>
               </div>
               <div className="w-10 h-10 rounded-lg bg-[#00A3FF]/10 border border-[#00A3FF]/20 flex items-center justify-center">
                 <Clock3 className="w-5 h-5 text-[#00A3FF]" />
@@ -320,32 +339,11 @@ export default function Dashboard() {
         </div>
       )}
 
-      {state === "result" && (() => {
-        const certInfo = result?.scan?.certInfo || {};
-        const analysis = result?.analysis || {};
-        const riskLevel = (analysis.riskLevel || "UNKNOWN").toUpperCase();
-        const riskColor = riskLevel === "CRITICAL" ? "#FF4D4D" : riskLevel === "HIGH" ? "#FF8C00" : riskLevel === "MEDIUM" ? "#FFB84D" : "#00FF94";
-        const riskBg = riskLevel === "CRITICAL" ? "bg-[#FF4D4D]/20 border-[#FF4D4D]/30" : riskLevel === "HIGH" ? "bg-[#FF8C00]/20 border-[#FF8C00]/30" : riskLevel === "MEDIUM" ? "bg-[#FFB84D]/20 border-[#FFB84D]/30" : "bg-[#00FF94]/20 border-[#00FF94]/30";
-        const riskPriorityLabel = riskLevel === "CRITICAL" ? "CRITICAL PRIORITY" : riskLevel === "HIGH" ? "HIGH PRIORITY" : riskLevel === "MEDIUM" ? "MEDIUM PRIORITY" : "LOW PRIORITY";
-        const algo = certInfo.publicKeyType || "Unknown";
-        const keySize = certInfo.publicKeySize;
-        const tlsVersion = certInfo.tlsVersion || "Unknown";
-        const issuer = certInfo.issuer?.organizationName || certInfo.issuer?.commonName || "Unknown";
-        const subject = certInfo.subject?.commonName || result?.scan?.host || "Unknown";
-        const notAfter = certInfo.notAfter ? new Date(certInfo.notAfter) : null;
-        const daysLeft = notAfter ? Math.max(0, Math.ceil((notAfter.getTime() - Date.now()) / 86400000)) : null;
-        const expiryColor = daysLeft !== null ? (daysLeft <= 30 ? "#FF4D4D" : daysLeft <= 90 ? "#FFB84D" : "#00FF94") : "#00FF94";
-        const recommendations = analysis.recommendations || [];
-        const reasons = analysis.reasons || [];
-        const vulnScore = analysis.vulnerabilityScore ?? scores.vulnerability;
-        const classicalScore = analysis.breakdown?.classicalScore ?? scores.classical;
-        const quantumScore = analysis.breakdown?.quantumScore ?? scores.quantum;
-
-        return (
+      {state === "result" && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
 
-            {/* Certificate Details — unique per domain */}
+            {/* Certificate Details */}
             <BentoCard delay={0} className="col-span-1 md:col-span-2">
               <div className="flex items-start justify-between mb-4">
                 <div>
@@ -452,7 +450,7 @@ export default function Dashboard() {
                   {reasons.length > 0 && (
                     <div className="flex flex-wrap gap-2">
                       {reasons.slice(0, 4).map((reason: string) => (
-                        <div key={reason} className="px-3 py-1 rounded-lg text-xs" style={{ backgroundColor: `${riskColor}18`, border: `1px solid ${riskColor}33`, color: riskColor }}>
+                        <div key={`reason-${reason}`} className="px-3 py-1 rounded-lg text-xs" style={{ backgroundColor: `${riskColor}18`, border: `1px solid ${riskColor}33`, color: riskColor }}>
                           {reason}
                         </div>
                       ))}
@@ -506,21 +504,20 @@ export default function Dashboard() {
                   <div className="text-xs text-gray-500 mt-1">Production ready</div>
                 </div>
               </div>
-              {recommendations.length > 0 && (
+              {recommendations.length > 0 ? (
                 <div className="mt-4 space-y-2">
                   {recommendations.map((rec: string, i: number) => (
-                    <div key={i} className="p-3 bg-[#00FF94]/10 border border-[#00FF94]/20 rounded-lg">
+                    <div key={`rec-${i}-${rec.substring(0, 10)}`} className="p-3 bg-[#00FF94]/10 border border-[#00FF94]/20 rounded-lg">
                       <p className="text-xs md:text-sm text-gray-300"><span className="font-bold text-[#00FF94]">→ </span>{rec}</p>
                     </div>
                   ))}
                 </div>
-              )}
-              {recommendations.length === 0 && (
-              <div className="mt-4 p-4 bg-[#00FF94]/10 border border-[#00FF94]/20 rounded-lg">
-                <p className="text-xs md:text-sm text-gray-300">
-                  <span className="font-bold text-[#00FF94]">Migration path:</span> Implement hybrid TLS with ML-KEM-768 + X25519 to keep both quantum-safe and classical security during transition.
-                </p>
-              </div>
+              ) : (
+                <div className="mt-4 p-4 bg-[#00FF94]/10 border border-[#00FF94]/20 rounded-lg">
+                  <p className="text-xs md:text-sm text-gray-300">
+                    <span className="font-bold text-[#00FF94]">Migration path:</span> Implement hybrid TLS with ML-KEM-768 + X25519 to keep both quantum-safe and classical security during transition.
+                  </p>
+                </div>
               )}
             </BentoCard>
           </div>
@@ -552,8 +549,6 @@ export default function Dashboard() {
           </div>
         </BentoCard>
       )}
-
-      {state === "empty" && null}
     </div>
   );
 }

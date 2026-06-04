@@ -159,7 +159,6 @@ export default function Dashboard() {
     return { vulnerability, quantum, classical };
   }, [result]);
 
-  // Compute safely at component render level instead of messy nested inline scopes
   const certInfo = result?.scan?.certInfo || {};
   const analysis = result?.analysis || {};
   const riskLevel = (analysis.riskLevel || "UNKNOWN").toUpperCase();
@@ -543,7 +542,7 @@ export default function Dashboard() {
             <h3 className="text-lg font-bold text-white">Audit failed</h3>
             <p className="text-sm text-gray-400 mt-2 max-w-2xl mx-auto">{errorMessage || "Unable to contact the audit backend. Try again later."}</p>
             <div className="mt-4">
-              <button onClick={handleReset} className="px-4 py-2 bg-[#00A3FF] text-white rounded-lg">Back</button>
+              <button onClick={handleReset} className="px-4 py-2 bg-[#00A3FF] text-white rounded-lg hover:bg-[#00A3FF]/80 transition-colors">Back</button>
             </div>
           </div>
         </BentoCard>

@@ -71,6 +71,7 @@
     "tailwindcss": "4.1.12",
     "vite": "6.3.5"
   },
+  "peerDependencies": {},
   "pnpm": {
     "overrides": {
       "vite": "6.3.5"

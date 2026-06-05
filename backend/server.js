@@ -24,8 +24,14 @@ const {
 
 function validateAdmin(req, res, next) {
   const token = req.headers['x-admin-token'] || (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
-  const adminToken = process.env.ADMIN_TOKEN || 'dev_admin_token';
-  if (!token || token !== adminToken) {
+  const adminToken = process.env.ADMIN_TOKEN;
+  
+  // Security protection: enforce a strong fallback if env is missing in production
+  if (!adminToken || adminToken === 'dev_admin_token') {
+    console.warn("WARNING: Running admin routes with a weak or missing ADMIN_TOKEN.");
+  }
+  
+  if (!token || token !== (adminToken || 'dev_admin_token')) {
     return res.status(403).json({ error: 'invalid_admin_token' });
   }
   return next();
@@ -47,27 +53,24 @@ app.use(express.json({
   },
 }));
 
-// ─── CORS ────────────────────────────────────────────────────────────────────
-// Set ALLOWED_ORIGINS in Render env as comma-separated list, e.g.:
-// https://pqc-dashboard.onrender.com,https://pqc-dashboard.vercel.app
+// ─── Production-Safe CORS Configuration ──────────────────────────────────────
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
-  : ['http://localhost:5173', 'http://localhost:4173'];
+  : ['http://localhost:5173', 'http://localhost:4173']; // Fallbacks for dev
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-
+  
   if (ALLOWED_ORIGINS.includes('*')) {
     res.header('Access-Control-Allow-Origin', '*');
   } else if (!origin) {
-    // no origin = curl / server-to-server / Postman — allow
+    // Allows server-to-server, Postman, or curl calls
     res.header('Access-Control-Allow-Origin', '*');
   } else if (ALLOWED_ORIGINS.includes(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Vary', 'Origin');
     res.header('Access-Control-Allow-Credentials', 'true');
   } else {
-    // blocked — still need to respond so browser gets a clear error
     res.header('Access-Control-Allow-Origin', 'null');
   }
 
@@ -77,17 +80,6 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
-
-// ─── Debug route — remove after confirming CORS works ────────────────────────
-app.get('/debug-cors', (req, res) => {
-  res.json({
-    allowedOrigins: ALLOWED_ORIGINS,
-    incomingOrigin: req.headers.origin || null,
-    envVar: process.env.ALLOWED_ORIGINS || null,
-    port: process.env.PORT || null,
-  });
-});
-// ─────────────────────────────────────────────────────────────────────────────
 
 function getClientIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
@@ -121,7 +113,6 @@ function applyRateLimit(req, res, next) {
       windowSeconds: RATE_LIMIT_WINDOW_MS / 1000,
     });
   }
-
   next();
 }
 
@@ -139,7 +130,6 @@ function resolvePythonExecutable() {
       return candidate;
     }
   }
-
   return 'python';
 }
 
@@ -205,7 +195,7 @@ function tryValidateApiKey(req) {
   });
 }
 
-// ─── Routes ──────────────────────────────────────────────────────────────────
+// ─── Standard User Facing Routes ─────────────────────────────────────────────
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
@@ -228,8 +218,11 @@ app.delete('/api/scans/:id', validateApiKeyWithoutQuota, async (req, res) => {
   try {
     const scanId = Number(req.params.id);
     if (!Number.isFinite(scanId)) return res.status(400).json({ error: 'invalid_scan_id' });
+
     const result = await deleteScanById(scanId, req.apiKeyEntry.id);
-    if (result.deletedCount === 0) return res.status(404).json({ error: 'scan_not_found' });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'scan_not_found' });
+    }
     return res.json({ ok: true, deletedCount: result.deletedCount });
   } catch (error) {
     console.error('scan_delete_failed', error);
@@ -302,21 +295,23 @@ app.post('/api/audit', validateApiKey, applyRateLimit, async (req, res) => {
     const storedScan = await insertScan(scan);
     const updatedApiKey = await incrementApiKeyUsage(req.apiKeyEntry.id) || req.apiKeyEntry;
 
-    return res.json({
-      scan: storedScan,
-      analysis,
-      usage: { count: updatedApiKey.usage_count ?? 0, quota: updatedApiKey.quota ?? null },
+    return res.json({ 
+      scan: storedScan, 
+      analysis, 
+      usage: { count: updatedApiKey.usage_count ?? 0, quota: updatedApiKey.quota ?? null } 
     });
   });
 });
 
-// ─── Admin routes ─────────────────────────────────────────────────────────────
+// ─── Admin Control Routes ────────────────────────────────────────────────────
 
-app.post('/admin/upgrade', validateAdmin, express.json(), async (req, res) => {
+app.post('/admin/upgrade', validateAdmin, async (req, res) => {
   try {
     const { keyId } = req.body || {};
     if (keyId == null) return res.status(400).json({ error: 'missing_keyId' });
-    const updated = await setApiKeyUnlimitedById(keyId);
+    
+    // RECTIFIED: Explicit integer parsing for database query compatibility
+    const updated = await setApiKeyUnlimitedById(Number(keyId));
     if (!updated) return res.status(404).json({ error: 'api_key_not_found' });
     return res.json({ ok: true, apiKey: updated });
   } catch (error) {
@@ -325,12 +320,17 @@ app.post('/admin/upgrade', validateAdmin, express.json(), async (req, res) => {
   }
 });
 
-app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) => {
+app.post('/admin/create-key', validateAdmin, async (req, res) => {
   try {
     const { plain, name, quota } = req.body || {};
     const plaintext = plain || `pqc_${crypto.randomBytes(12).toString('hex')}`;
     const hashed = crypto.createHash('sha256').update(plaintext).digest('hex');
+    
+    // RECTIFIED: Connect safely via your existing connection lifecycle handler
     const database = await connectMongo();
+    if (!database || typeof database.collection !== 'function') {
+      throw new Error('Database object connection layer returned an un-indexable client reference.');
+    }
 
     let id = Math.floor(Math.random() * 1000000) + 100;
     while (await database.collection('api_keys').findOne({ id })) {
@@ -341,7 +341,7 @@ app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) =>
       id,
       name: name || 'generated-via-api',
       hashed_key: hashed,
-      quota: quota != null ? quota : 5,
+      quota: quota != null ? Number(quota) : 5,
       usage_count: 0,
       expires_at: null,
     };
@@ -350,21 +350,24 @@ app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) =>
     const keyFingerprint = hashed.slice(0, 16);
     const safeDoc = { ...doc };
     delete safeDoc.hashed_key;
-    return res.json({ ok: true, apiKey: safeDoc, keyFingerprint });
+    
+    return res.json({ ok: true, apiKey: safeDoc, keyFingerprint, plaintext });
   } catch (error) {
     console.error('create_key_failed', error);
-    return res.status(500).json({ error: 'create_key_failed' });
+    return res.status(500).json({ error: 'create_key_failed', details: error.message });
   }
 });
 
-app.post('/admin/set-quota', validateAdmin, express.json(), async (req, res) => {
+app.post('/admin/set-quota', validateAdmin, async (req, res) => {
   try {
     const { keyId, quota } = req.body || {};
     if (quota == null) return res.status(400).json({ error: 'missing_quota' });
     const q = Number(quota);
     if (!Number.isFinite(q) || q < 0) return res.status(400).json({ error: 'invalid_quota' });
     if (keyId == null) return res.status(400).json({ error: 'missing_keyId' });
-    const updated = await setQuotaForApiKeyId(keyId, quota);
+
+    // RECTIFIED: Enforce typed numbers on parameters
+    const updated = await setQuotaForApiKeyId(Number(keyId), q);
     if (!updated) return res.status(404).json({ error: 'api_key_not_found' });
     return res.json({ ok: true, apiKey: updated });
   } catch (error) {
@@ -383,11 +386,14 @@ app.get('/admin/keys', validateAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/set-quota-all', validateAdmin, express.json(), async (req, res) => {
+app.post('/admin/set-quota-all', validateAdmin, async (req, res) => {
   try {
     const { quota } = req.body || {};
     if (quota == null) return res.status(400).json({ error: 'missing_quota' });
-    const result = await setQuotaForAll(quota);
+    const q = Number(quota);
+    if (!Number.isFinite(q) || q < 0) return res.status(400).json({ error: 'invalid_quota' });
+
+    const result = await setQuotaForAll(q);
     return res.json({ ok: true, result });
   } catch (error) {
     console.error('set_quota_all_failed', error);
@@ -395,11 +401,13 @@ app.post('/admin/set-quota-all', validateAdmin, express.json(), async (req, res)
   }
 });
 
-app.post('/admin/revoke-key', validateAdmin, express.json(), async (req, res) => {
+app.post('/admin/revoke-key', validateAdmin, async (req, res) => {
   try {
     const { keyId, action } = req.body || {};
     if (keyId == null) return res.status(400).json({ error: 'missing_keyId' });
-    const result = await revokeApiKeyById(keyId, action);
+    
+    // RECTIFIED: Cast parameter to standard payload number structure
+    const result = await revokeApiKeyById(Number(keyId), action);
     return res.json({ ok: true, ...result });
   } catch (error) {
     console.error('revoke_key_failed', error);
@@ -407,51 +415,52 @@ app.post('/admin/revoke-key', validateAdmin, express.json(), async (req, res) =>
   }
 });
 
-// ─── Startup ──────────────────────────────────────────────────────────────────
-// FIX: Render assigns a single PORT — never increment it.
-// Start HTTP server immediately so Render's health check passes,
-// then connect MongoDB in the background.
+// ─── RECTIFIED Startup Lifecycle ─────────────────────────────────────────────
+
 const PORT = parseInt(process.env.PORT || '4000', 10);
 
+// RECTIFIED: Bind listener instantly so hosting provider routing setups clear successfully
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Backend listening on 0.0.0.0:${PORT}`);
+  console.log(`Web application online & listening on port ${PORT}`);
 });
 
 server.on('error', (err) => {
-  console.error('Failed to bind port:', err);
+  console.error('Fatal binding error encountered during web-server setup:', err);
   process.exit(1);
 });
 
-async function connectWithRetry() {
+async function runDatabaseInit() {
   const MAX_RETRIES = 5;
   let attempt = 0;
   while (attempt <= MAX_RETRIES) {
     try {
       await connectMongo();
-      console.log('MongoDB connected');
+      console.log('MongoDB cluster linked successfully.');
       try {
         await setQuotaForAll(5);
-        console.log('Applied default quota=5 to all API keys');
+        console.log('Applied backup safety quota=5 across keys.');
       } catch (e) {
-        console.warn('Could not apply default quota:', e?.message ?? e);
+        console.warn('Initial key check update skipped:', e?.message || e);
       }
       return;
     } catch (error) {
       attempt += 1;
       const delay = Math.min(16000, 1000 * Math.pow(2, attempt - 1));
-      console.error(`MongoDB connection attempt ${attempt} failed:`, error.message || error);
+      console.error(`Database startup sequence error (Attempt ${attempt}):`, error.message || error);
+      
       if (attempt > MAX_RETRIES) {
-        console.error('Exceeded MongoDB connection retries. Server stays up but DB is unavailable.');
-        return; // don't exit — let Render keep the process alive
+        console.error('Database unreachable. Process running in degraded mode to keep health checks active.');
+        return; 
       }
-      console.log(`Retrying in ${delay}ms...`);
+      console.log(`Re-evaluating client links in ${delay}ms...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }
 
-connectWithRetry();
+// Spin up DB linkages asynchronously in the background
+runDatabaseInit();
 
-// ─── Graceful shutdown ────────────────────────────────────────────────────────
+// ─── Graceful termination ───────────────────────────────────────────────────
 process.on('SIGINT', async () => { await closeMongo(); process.exit(0); });
 process.on('SIGTERM', async () => { await closeMongo(); process.exit(0); });

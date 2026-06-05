@@ -78,8 +78,8 @@ export default config;
  */
 export const getMaskedApiKey = (apiKey: string): string => {
   if (!apiKey) return 'No key loaded';
-  if (apiKey.length < 8) return '••••••••';
+  if (apiKey.length < 8) return '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
   const visiblePart = apiKey.substring(0, 8);
-  const hiddenPart = '•'.repeat(apiKey.length - 8);
+  const hiddenPart = '\u2022'.repeat(apiKey.length - 8);
   return `${visiblePart}${hiddenPart}`;
 };

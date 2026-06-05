@@ -10,7 +10,6 @@ const DEFAULT_API_BASE_URL = "http://localhost:4000";
 const normalizeApiBaseUrl = (url: string): string => {
   const trimmed = url.trim().replace(/\/+$/, "");
   if (!trimmed) return DEFAULT_API_BASE_URL;
-  if (trimmed === "http://localhost:4004") return DEFAULT_API_BASE_URL;
   return trimmed;
 };
 
@@ -38,14 +37,14 @@ export const getApiKey = (): string =>
   getStoredValue(API_KEY_STORAGE_KEY) || getStoredValue(LEGACY_API_KEY_STORAGE_KEY) || import.meta.env.VITE_API_KEY || "";
 
 export const setApiKeyOverride = (apiKey: string) => {
+  // Save only to the new key locally to cleanly migrate away from legacy storage
   setStoredValue(API_KEY_STORAGE_KEY, apiKey);
-  setStoredValue(LEGACY_API_KEY_STORAGE_KEY, apiKey);
   notifyConfigChanged();
 };
 
 export const clearApiKeyOverride = () => {
   removeStoredValue(API_KEY_STORAGE_KEY);
-  removeStoredValue(LEGACY_API_KEY_STORAGE_KEY);
+  removeStoredValue(LEGACY_API_KEY_STORAGE_KEY); // Purges old states cleanly
   notifyConfigChanged();
 };
 
@@ -72,6 +71,23 @@ export const config = {
 };
 
 export default config;
+
+/**
+ * Gets the masked version of API key for display
+ * Hardened to protect random plaintext strings from exposure.
+ */
+export const getMaskedApiKey = (apiKey: string): string => {
+  if (!apiKey) return 'No key loaded';
+  if (apiKey.length < 12) return '••••••••';
+  
+  // Example for 'pqc_12345abcdef...': returns 'pqc_•••••cdef'
+  // This validates the prefix while hiding the critical core entropy chunks
+  const prefix = apiKey.startsWith('pqc_') ? 'pqc_' : apiKey.substring(0, 4);
+  const suffix = apiKey.substring(apiKey.length - 4);
+  const hiddenPart = '•'.repeat(8); 
+  
+  return `${prefix}${hiddenPart}${suffix}`;
+};
 
 /**
  * Gets the masked version of API key for display

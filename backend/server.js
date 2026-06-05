@@ -54,67 +54,56 @@ app.use(express.json({
 }));
 
 // ─── Production-Safe CORS Configuration ──────────────────────────────────────
+// ─── CORS Configuration ─────────────────────────────────────────────
+
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
-  : ['http://localhost:5173', 'http://localhost:4173']; // Fallbacks for dev
+  ? process.env.ALLOWED_ORIGINS.split(',')
+      .map(origin => origin.trim())
+      .filter(Boolean)
+  : [
+      'http://localhost:5173',
+      'http://localhost:4173',
+      'https://cryptoguard-lovat.vercel.app'
+    ];
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  
-  if (ALLOWED_ORIGINS.includes('*')) {
+
+  // Allow Postman, curl, backend-to-backend requests
+  if (!origin) {
     res.header('Access-Control-Allow-Origin', '*');
-  } else if (!origin) {
-    // Allows server-to-server, Postman, or curl calls
-    res.header('Access-Control-Allow-Origin', '*');
-  } else if (ALLOWED_ORIGINS.includes(origin)) {
+  }
+  // Allow whitelisted origins
+  else if (ALLOWED_ORIGINS.includes(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
-    res.header('Vary', 'Origin');
     res.header('Access-Control-Allow-Credentials', 'true');
-  } else {
-    res.header('Access-Control-Allow-Origin', 'null');
+    res.header('Vary', 'Origin');
   }
-
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Admin-Token');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
-
-function getClientIp(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.trim()) {
-    return forwarded.split(',')[0].trim();
-  }
-  return req.ip || req.socket?.remoteAddress || 'unknown';
-}
-
-function applyRateLimit(req, res, next) {
-  const apiKeyId = req.apiKeyEntry?.id || 'anonymous';
-  const clientIp = getClientIp(req);
-  const bucketKey = `${apiKeyId}:${clientIp}`;
-  const now = Date.now();
-  const state = rateState.get(bucketKey) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
-
-  if (now > state.resetAt) {
-    state.count = 0;
-    state.resetAt = now + RATE_LIMIT_WINDOW_MS;
-  }
-
-  state.count += 1;
-  rateState.set(bucketKey, state);
-
-  if (state.count > RATE_LIMIT_MAX) {
-    const retryAfter = Math.max(1, Math.ceil((state.resetAt - now) / 1000));
-    return res.status(429).json({
-      error: 'rate_limited',
-      retryAfterSeconds: retryAfter,
-      limit: RATE_LIMIT_MAX,
-      windowSeconds: RATE_LIMIT_WINDOW_MS / 1000,
+  // Block everything else
+  else {
+    console.warn(`CORS blocked for origin: ${origin}`);
+    return res.status(403).json({
+      error: 'cors_not_allowed',
+      origin
     });
   }
+
+  res.header(
+    'Access-Control-Allow-Headers',
+    'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Admin-Token'
+  );
+
+  res.header(
+    'Access-Control-Allow-Methods',
+    'GET, POST, PUT, DELETE, OPTIONS'
+  );
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
   next();
-}
+});
 
 function resolvePythonExecutable() {
   const candidates = [

@@ -13,4 +13,5 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         sync: false
-      
+      - key: PORT
+        value: 4000

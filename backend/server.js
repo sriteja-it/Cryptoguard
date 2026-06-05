@@ -36,7 +36,7 @@ const RATE_LIMIT_MAX = 20;
 const rateState = new Map();
 
 const app = express();
-// capture raw request body for debugging (keeps JSON parsing)
+
 app.use(express.json({
   verify: (req, _res, buf) => {
     try {
@@ -47,22 +47,47 @@ app.use(express.json({
   },
 }));
 
-// CORS — supports both local dev and production (Vercel frontend -> Render backend)
+// ─── CORS ────────────────────────────────────────────────────────────────────
+// Set ALLOWED_ORIGINS in Render env as comma-separated list, e.g.:
+// https://pqc-dashboard.onrender.com,https://pqc-dashboard.vercel.app
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
   : ['http://localhost:5173', 'http://localhost:4173'];
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (!origin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*')) {
-    res.header('Access-Control-Allow-Origin', origin || '*');
+
+  if (ALLOWED_ORIGINS.includes('*')) {
+    res.header('Access-Control-Allow-Origin', '*');
+  } else if (!origin) {
+    // no origin = curl / server-to-server / Postman — allow
+    res.header('Access-Control-Allow-Origin', '*');
+  } else if (ALLOWED_ORIGINS.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Vary', 'Origin');
     res.header('Access-Control-Allow-Credentials', 'true');
+  } else {
+    // blocked — still need to respond so browser gets a clear error
+    res.header('Access-Control-Allow-Origin', 'null');
   }
+
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Admin-Token');
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
+
+// ─── Debug route — remove after confirming CORS works ────────────────────────
+app.get('/debug-cors', (req, res) => {
+  res.json({
+    allowedOrigins: ALLOWED_ORIGINS,
+    incomingOrigin: req.headers.origin || null,
+    envVar: process.env.ALLOWED_ORIGINS || null,
+    port: process.env.PORT || null,
+  });
+});
+// ─────────────────────────────────────────────────────────────────────────────
 
 function getClientIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
@@ -163,7 +188,6 @@ function validateApiKeyWithoutQuota(req, res, next) {
     });
 }
 
-// Try to validate API key but don't fail the request if missing/invalid.
 function tryValidateApiKey(req) {
   return new Promise((resolve) => {
     const auth = req.headers['authorization'] || '';
@@ -181,15 +205,15 @@ function tryValidateApiKey(req) {
   });
 }
 
+// ─── Routes ──────────────────────────────────────────────────────────────────
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 app.get('/api/scans', async (req, res) => {
   try {
-    // allow public read-only access to recent scans if API key is missing/expired
     const entry = await tryValidateApiKey(req);
     const limit = Math.min(parseInt(req.query.limit || '10', 10) || 10, 50);
     const scans = await getRecentScans(limit);
-    // attach apiKeyInfo when a valid key is present (for UI usage info)
     if (entry) {
       return res.json({ scans, apiKey: { id: entry.id, usage_count: entry.usage_count ?? 0, quota: entry.quota ?? null } });
     }
@@ -204,12 +228,8 @@ app.delete('/api/scans/:id', validateApiKeyWithoutQuota, async (req, res) => {
   try {
     const scanId = Number(req.params.id);
     if (!Number.isFinite(scanId)) return res.status(400).json({ error: 'invalid_scan_id' });
-
     const result = await deleteScanById(scanId, req.apiKeyEntry.id);
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ error: 'scan_not_found' });
-    }
-
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'scan_not_found' });
     return res.json({ ok: true, deletedCount: result.deletedCount });
   } catch (error) {
     console.error('scan_delete_failed', error);
@@ -227,7 +247,6 @@ app.delete('/api/scans', validateApiKeyWithoutQuota, async (req, res) => {
   }
 });
 
-// Return usage/quota for the authenticated API key
 app.get('/api/usage', validateApiKey, async (req, res) => {
   try {
     const entry = req.apiKeyEntry;
@@ -238,12 +257,10 @@ app.get('/api/usage', validateApiKey, async (req, res) => {
   }
 });
 
-// POST /api/audit
 app.post('/api/audit', validateApiKey, applyRateLimit, async (req, res) => {
   const { url } = req.body || {};
   if (!url) return res.status(400).json({ error: 'missing_url' });
 
-  // call python scraper
   const scriptPath = path.join(__dirname, 'python', 'scrape_cert.py');
   const host = url.replace(/^https?:\/\//, '').split('/')[0];
   const pythonBin = resolvePythonExecutable();
@@ -272,8 +289,6 @@ app.post('/api/audit', validateApiKey, applyRateLimit, async (req, res) => {
     }
 
     const analysis = riskEngine.analyze(certInfo);
-
-    // store scan
     const scanId = await getNextScanId();
     const scan = {
       id: scanId,
@@ -285,37 +300,18 @@ app.post('/api/audit', validateApiKey, applyRateLimit, async (req, res) => {
       apiKeyId: req.apiKeyEntry.id,
     };
     const storedScan = await insertScan(scan);
-
-    // increment usage
     const updatedApiKey = await incrementApiKeyUsage(req.apiKeyEntry.id) || req.apiKeyEntry;
 
-    return res.json({ scan: storedScan, analysis, usage: { count: updatedApiKey.usage_count ?? 0, quota: updatedApiKey.quota ?? null } });
+    return res.json({
+      scan: storedScan,
+      analysis,
+      usage: { count: updatedApiKey.usage_count ?? 0, quota: updatedApiKey.quota ?? null },
+    });
   });
 });
 
-const START_PORT = parseInt(process.env.PORT || '4000', 10);
-const MAX_TRIES = 11;
+// ─── Admin routes ─────────────────────────────────────────────────────────────
 
-function tryListen(startPort, tries) {
-  let attempt = 0;
-  function listenNext() {
-    const p = startPort + attempt;
-    const server = app.listen(p, () => console.log(`Backend running on http://localhost:${p}`));
-    server.on('error', (err) => {
-      if (err.code === 'EADDRINUSE' && attempt < tries - 1) {
-        attempt += 1;
-        console.warn(`Port ${p} in use, trying ${startPort + attempt}...`);
-        setTimeout(listenNext, 200);
-      } else {
-        console.error('Failed to bind port', err);
-        process.exit(1);
-      }
-    });
-  }
-  listenNext();
-}
-
-// Admin: upgrade API key to unlimited quota
 app.post('/admin/upgrade', validateAdmin, express.json(), async (req, res) => {
   try {
     const { keyId } = req.body || {};
@@ -329,7 +325,6 @@ app.post('/admin/upgrade', validateAdmin, express.json(), async (req, res) => {
   }
 });
 
-// Admin: create a new API key (returns plaintext key)
 app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) => {
   try {
     const { plain, name, quota } = req.body || {};
@@ -337,10 +332,7 @@ app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) =>
     const hashed = crypto.createHash('sha256').update(plaintext).digest('hex');
     const database = await connectMongo();
 
-    // generate unique id
     let id = Math.floor(Math.random() * 1000000) + 100;
-    // ensure uniqueness
-    // eslint-disable-next-line no-await-in-loop
     while (await database.collection('api_keys').findOne({ id })) {
       id = Math.floor(Math.random() * 1000000) + 100;
     }
@@ -355,7 +347,6 @@ app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) =>
     };
 
     await database.collection('api_keys').insertOne(doc);
-    // Do not return plaintext in API responses. Return key metadata and fingerprint only.
     const keyFingerprint = hashed.slice(0, 16);
     const safeDoc = { ...doc };
     delete safeDoc.hashed_key;
@@ -366,16 +357,13 @@ app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) =>
   }
 });
 
-// Admin: set quota for a key by key ID
 app.post('/admin/set-quota', validateAdmin, express.json(), async (req, res) => {
   try {
     const { keyId, quota } = req.body || {};
     if (quota == null) return res.status(400).json({ error: 'missing_quota' });
     const q = Number(quota);
     if (!Number.isFinite(q) || q < 0) return res.status(400).json({ error: 'invalid_quota' });
-
     if (keyId == null) return res.status(400).json({ error: 'missing_keyId' });
-
     const updated = await setQuotaForApiKeyId(keyId, quota);
     if (!updated) return res.status(404).json({ error: 'api_key_not_found' });
     return res.json({ ok: true, apiKey: updated });
@@ -385,7 +373,6 @@ app.post('/admin/set-quota', validateAdmin, express.json(), async (req, res) => 
   }
 });
 
-// Admin: list all API keys (no hashed_key included)
 app.get('/admin/keys', validateAdmin, async (req, res) => {
   try {
     const all = await listApiKeys();
@@ -396,7 +383,6 @@ app.get('/admin/keys', validateAdmin, async (req, res) => {
   }
 });
 
-// Admin: set quota for all API keys to a specific value
 app.post('/admin/set-quota-all', validateAdmin, express.json(), async (req, res) => {
   try {
     const { quota } = req.body || {};
@@ -409,7 +395,6 @@ app.post('/admin/set-quota-all', validateAdmin, express.json(), async (req, res)
   }
 });
 
-// Admin: revoke or delete a key by key ID
 app.post('/admin/revoke-key', validateAdmin, express.json(), async (req, res) => {
   try {
     const { keyId, action } = req.body || {};
@@ -422,45 +407,51 @@ app.post('/admin/revoke-key', validateAdmin, express.json(), async (req, res) =>
   }
 });
 
-async function start() {
+// ─── Startup ──────────────────────────────────────────────────────────────────
+// FIX: Render assigns a single PORT — never increment it.
+// Start HTTP server immediately so Render's health check passes,
+// then connect MongoDB in the background.
+const PORT = parseInt(process.env.PORT || '4000', 10);
+
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Backend listening on 0.0.0.0:${PORT}`);
+});
+
+server.on('error', (err) => {
+  console.error('Failed to bind port:', err);
+  process.exit(1);
+});
+
+async function connectWithRetry() {
   const MAX_RETRIES = 5;
   let attempt = 0;
   while (attempt <= MAX_RETRIES) {
     try {
       await connectMongo();
       console.log('MongoDB connected');
-      // Ensure all existing keys have a default quota of 5
       try {
         await setQuotaForAll(5);
         console.log('Applied default quota=5 to all API keys');
       } catch (e) {
-        console.warn('Could not apply default quota to all keys:', e && e.message ? e.message : e);
+        console.warn('Could not apply default quota:', e?.message ?? e);
       }
-      tryListen(START_PORT, MAX_TRIES);
       return;
     } catch (error) {
       attempt += 1;
       const delay = Math.min(16000, 1000 * Math.pow(2, attempt - 1));
       console.error(`MongoDB connection attempt ${attempt} failed:`, error.message || error);
       if (attempt > MAX_RETRIES) {
-        console.error('Exceeded MongoDB connection retries. Exiting.');
-        process.exit(1);
+        console.error('Exceeded MongoDB connection retries. Server stays up but DB is unavailable.');
+        return; // don't exit — let Render keep the process alive
       }
-      console.log(`Retrying MongoDB connection in ${delay}ms...`);
-      // eslint-disable-next-line no-await-in-loop
+      console.log(`Retrying in ${delay}ms...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }
 
-process.on('SIGINT', async () => {
-  await closeMongo();
-  process.exit(0);
-});
+connectWithRetry();
 
-process.on('SIGTERM', async () => {
-  await closeMongo();
-  process.exit(0);
-});
-
-start();
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
+process.on('SIGINT', async () => { await closeMongo(); process.exit(0); });
+process.on('SIGTERM', async () => { await closeMongo(); process.exit(0); });

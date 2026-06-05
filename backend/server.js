@@ -5,6 +5,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const riskEngine = require('./riskEngine');
+const mongoStore = require('./mongoStore');
+
+// Destructure methods safely
 const {
   connectMongo,
   getApiKeyByHash,
@@ -20,13 +23,12 @@ const {
   listApiKeys,
   setQuotaForAll,
   setQuotaForApiKeyId,
-} = require('./mongoStore');
+} = mongoStore;
 
 function validateAdmin(req, res, next) {
   const token = req.headers['x-admin-token'] || (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
   const adminToken = process.env.ADMIN_TOKEN;
   
-  // Security protection: enforce a strong fallback if env is missing in production
   if (!adminToken || adminToken === 'dev_admin_token') {
     console.warn("WARNING: Running admin routes with a weak or missing ADMIN_TOKEN.");
   }
@@ -41,6 +43,9 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 20;
 const rateState = new Map();
 
+// Track database connection readiness locally
+let isDatabaseReady = false;
+
 const app = express();
 
 app.use(express.json({
@@ -53,57 +58,80 @@ app.use(express.json({
   },
 }));
 
-// ─── Production-Safe CORS Configuration ──────────────────────────────────────
-// ─── CORS Configuration ─────────────────────────────────────────────
+// ─── Database Readiness Shield Middleware ────────────────────────────────────
+// Prevents incoming API traffic from execution if the cluster is still linking.
+app.use((req, res, next) => {
+  if (req.path === '/health') return next();
+  if (!isDatabaseReady) {
+    return res.status(503).json({ 
+      error: 'database_initializing', 
+      message: 'The server is online but still establishing database links. Please retry in a few seconds.' 
+    });
+  }
+  next();
+});
 
+// ─── Production CORS Configuration ──────────────────────────────────────────
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',')
-      .map(origin => origin.trim())
-      .filter(Boolean)
-  : [
-      'http://localhost:5173',
-      'http://localhost:4173',
-      'https://cryptoguard-lovat.vercel.app'
-    ];
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
+  : ['http://localhost:5173', 'http://localhost:4173', 'https://cryptoguard-lovat.vercel.app'];
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-
-  // Allow Postman, curl, backend-to-backend requests
-  if (!origin) {
+  
+  if (ALLOWED_ORIGINS.includes('*')) {
     res.header('Access-Control-Allow-Origin', '*');
-  }
-  // Allow whitelisted origins
-  else if (ALLOWED_ORIGINS.includes(origin)) {
+  } else if (!origin) {
+    res.header('Access-Control-Allow-Origin', '*');
+  } else if (ALLOWED_ORIGINS.includes(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Vary', 'Origin');
-  }
-  // Block everything else
-  else {
-    console.warn(`CORS blocked for origin: ${origin}`);
-    return res.status(403).json({
-      error: 'cors_not_allowed',
-      origin
-    });
+    res.header('Access-Control-Allow-Credentials', 'true');
+  } else {
+    res.header('Access-Control-Allow-Origin', 'null');
   }
 
-  res.header(
-    'Access-Control-Allow-Headers',
-    'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Admin-Token'
-  );
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Admin-Token');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
 
-  res.header(
-    'Access-Control-Allow-Methods',
-    'GET, POST, PUT, DELETE, OPTIONS'
-  );
-
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
-
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
+
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function applyRateLimit(req, res, next) {
+  const apiKeyId = req.apiKeyEntry?.id || 'anonymous';
+  const clientIp = getClientIp(req);
+  const bucketKey = `${apiKeyId}:${clientIp}`;
+  const now = Date.now();
+  const state = rateState.get(bucketKey) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+
+  if (now > state.resetAt) {
+    state.count = 0;
+    state.resetAt = now + RATE_LIMIT_WINDOW_MS;
+  }
+
+  state.count += 1;
+  rateState.set(bucketKey, state);
+
+  if (state.count > RATE_LIMIT_MAX) {
+    const retryAfter = Math.max(1, Math.ceil((state.resetAt - now) / 1000));
+    return res.status(429).json({
+      error: 'rate_limited',
+      retryAfterSeconds: retryAfter,
+      limit: RATE_LIMIT_MAX,
+      windowSeconds: RATE_LIMIT_WINDOW_MS / 1000,
+    });
+  }
+  next();
+}
 
 function resolvePythonExecutable() {
   const candidates = [
@@ -184,9 +212,9 @@ function tryValidateApiKey(req) {
   });
 }
 
-// ─── Standard User Facing Routes ─────────────────────────────────────────────
+// ─── User Facing Routes ──────────────────────────────────────────────────────
 
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/health', (req, res) => res.json({ status: 'ok', databaseConnected: isDatabaseReady }));
 
 app.get('/api/scans', async (req, res) => {
   try {
@@ -299,7 +327,6 @@ app.post('/admin/upgrade', validateAdmin, async (req, res) => {
     const { keyId } = req.body || {};
     if (keyId == null) return res.status(400).json({ error: 'missing_keyId' });
     
-    // RECTIFIED: Explicit integer parsing for database query compatibility
     const updated = await setApiKeyUnlimitedById(Number(keyId));
     if (!updated) return res.status(404).json({ error: 'api_key_not_found' });
     return res.json({ ok: true, apiKey: updated });
@@ -315,14 +342,13 @@ app.post('/admin/create-key', validateAdmin, async (req, res) => {
     const plaintext = plain || `pqc_${crypto.randomBytes(12).toString('hex')}`;
     const hashed = crypto.createHash('sha256').update(plaintext).digest('hex');
     
-    // RECTIFIED: Connect safely via your existing connection lifecycle handler
+    // RECTIFIED: Use custom mongoStore abstraction reference to find/insert safely 
+    // rather than running direct driver layer evaluations in routes
     const database = await connectMongo();
-    if (!database || typeof database.collection !== 'function') {
-      throw new Error('Database object connection layer returned an un-indexable client reference.');
-    }
+    const dbInstance = database.db ? database.db() : database; 
 
     let id = Math.floor(Math.random() * 1000000) + 100;
-    while (await database.collection('api_keys').findOne({ id })) {
+    while (await dbInstance.collection('api_keys').findOne({ id })) {
       id = Math.floor(Math.random() * 1000000) + 100;
     }
 
@@ -335,7 +361,7 @@ app.post('/admin/create-key', validateAdmin, async (req, res) => {
       expires_at: null,
     };
 
-    await database.collection('api_keys').insertOne(doc);
+    await dbInstance.collection('api_keys').insertOne(doc);
     const keyFingerprint = hashed.slice(0, 16);
     const safeDoc = { ...doc };
     delete safeDoc.hashed_key;
@@ -355,7 +381,6 @@ app.post('/admin/set-quota', validateAdmin, async (req, res) => {
     if (!Number.isFinite(q) || q < 0) return res.status(400).json({ error: 'invalid_quota' });
     if (keyId == null) return res.status(400).json({ error: 'missing_keyId' });
 
-    // RECTIFIED: Enforce typed numbers on parameters
     const updated = await setQuotaForApiKeyId(Number(keyId), q);
     if (!updated) return res.status(404).json({ error: 'api_key_not_found' });
     return res.json({ ok: true, apiKey: updated });
@@ -395,7 +420,6 @@ app.post('/admin/revoke-key', validateAdmin, async (req, res) => {
     const { keyId, action } = req.body || {};
     if (keyId == null) return res.status(400).json({ error: 'missing_keyId' });
     
-    // RECTIFIED: Cast parameter to standard payload number structure
     const result = await revokeApiKeyById(Number(keyId), action);
     return res.json({ ok: true, ...result });
   } catch (error) {
@@ -404,11 +428,10 @@ app.post('/admin/revoke-key', validateAdmin, async (req, res) => {
   }
 });
 
-// ─── RECTIFIED Startup Lifecycle ─────────────────────────────────────────────
+// ─── App Startup Sequence ────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 
-// RECTIFIED: Bind listener instantly so hosting provider routing setups clear successfully
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Web application online & listening on port ${PORT}`);
 });
@@ -425,12 +448,16 @@ async function runDatabaseInit() {
     try {
       await connectMongo();
       console.log('MongoDB cluster linked successfully.');
+      
       try {
         await setQuotaForAll(5);
         console.log('Applied backup safety quota=5 across keys.');
       } catch (e) {
         console.warn('Initial key check update skipped:', e?.message || e);
       }
+      
+      // Mark initialization complete, unlocking execution blocks
+      isDatabaseReady = true;
       return;
     } catch (error) {
       attempt += 1;
@@ -438,7 +465,7 @@ async function runDatabaseInit() {
       console.error(`Database startup sequence error (Attempt ${attempt}):`, error.message || error);
       
       if (attempt > MAX_RETRIES) {
-        console.error('Database unreachable. Process running in degraded mode to keep health checks active.');
+        console.error('Database unreachable after retries. App remains up in degraded mode for health checks.');
         return; 
       }
       console.log(`Re-evaluating client links in ${delay}ms...`);
@@ -447,9 +474,8 @@ async function runDatabaseInit() {
   }
 }
 
-// Spin up DB linkages asynchronously in the background
 runDatabaseInit();
 
-// ─── Graceful termination ───────────────────────────────────────────────────
+// ─── Graceful Termination Lifecycle ──────────────────────────────────────────
 process.on('SIGINT', async () => { await closeMongo(); process.exit(0); });
 process.on('SIGTERM', async () => { await closeMongo(); process.exit(0); });

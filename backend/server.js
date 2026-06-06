@@ -48,9 +48,22 @@ app.use(express.json({
 }));
 
 // CORS: use FRONTEND_URL env var in production, fall back to wildcard for dev
-const ALLOWED_ORIGIN = process.env.FRONTEND_URL || '*';
+// ── CORS ─────────────────────────────────────────────────────────────────────
+const ALLOWED_ORIGINS = (process.env.FRONTEND_URL || '*')
+  .split(',')
+  .map(o => o.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+  const origin = (req.headers.origin || '').replace(/\/$/, '');
+
+  if (ALLOWED_ORIGINS.includes('*')) {
+    res.header('Access-Control-Allow-Origin', '*');
+  } else if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Vary', 'Origin');
+  }
+
   res.header(
     'Access-Control-Allow-Headers',
     'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Admin-Token'
@@ -60,6 +73,7 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function getClientIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
   if (typeof forwarded === 'string' && forwarded.trim()) {
@@ -68,16 +82,17 @@ function getClientIp(req) {
   return req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
+// ── Rate limiter ──────────────────────────────────────────────────────────────
 function applyRateLimit(req, res, next) {
-  const apiKeyId = req.apiKeyEntry?.id || 'anonymous';
+  const apiKeyId = req.apiKeyEntry?.id ?? 'anonymous';
   const clientIp = getClientIp(req);
   const bucketKey = `${apiKeyId}:${clientIp}`;
   const now = Date.now();
-  const state = rateState.get(bucketKey) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
 
-  if (now > state.resetAt) {
-    state.count = 0;
-    state.resetAt = now + RATE_LIMIT_WINDOW_MS;
+  let state = rateState.get(bucketKey);
+
+  if (!state || now > state.resetAt) {
+    state = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
   }
 
   state.count += 1;
@@ -95,7 +110,6 @@ function applyRateLimit(req, res, next) {
 
   next();
 }
-
 function resolvePythonExecutable() {
   const candidates = [
     process.env.PYTHON_BIN,

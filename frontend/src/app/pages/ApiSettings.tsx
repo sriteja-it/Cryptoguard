@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { Copy, RefreshCw, Trash2, CheckCircle2, Shield, ArrowUpRight, Database, Globe, Eye, EyeOff } from "lucide-react";
+import {
+  Copy,
+  RefreshCw,
+  Trash2,
+  CheckCircle2,
+  Shield,
+  ArrowUpRight,
+  Database,
+  Globe,
+  Eye,
+  EyeOff,
+} from "lucide-react";
 import BentoCard from "../components/BentoCard";
 import ActionDialog, { ActionDialogField } from "../components/ActionDialog";
 import { motion } from "motion/react";
@@ -9,10 +20,20 @@ import {
   getMaskedApiKey,
   setApiKeyOverride,
   getApiBaseUrl,
-  setApiBaseUrlOverride,   // ✅ correct name
+  setApiBaseUrlOverride,
   clearApiBaseUrlOverride,
 } from "../../utils/config";
 import { getFetchErrorMessage, readJson, resolveApiError } from "../../utils/api";
+
+// ── Dialog kind union ─────────────────────────────────────────────────────────
+type DialogKind =
+  | { kind: "revoke" }
+  | { kind: "upgrade" }
+  | { kind: "setQuota" }
+  | { kind: "showKeys" }
+  | { kind: "setAllQuota" }
+  | { kind: "setSingleQuota"; adminKey: any }
+  | null;
 
 export default function ApiSettings() {
   const [showKey, setShowKey] = useState(false);
@@ -25,15 +46,8 @@ export default function ApiSettings() {
   const [scans, setScans] = useState<any[]>([]);
   const [adminKeys, setAdminKeys] = useState<any[] | null>(null);
   const [bannerMessage, setBannerMessage] = useState<string>("");
-  const [activeDialog, setActiveDialog] = useState
-    | { kind: "revoke" }
-    | { kind: "upgrade" }
-    | { kind: "setQuota" }
-    | { kind: "showKeys" }
-    | { kind: "setAllQuota" }
-    | { kind: "setSingleQuota"; adminKey: any }
-    | null
-  >(null);
+  // ✅ Fixed: was missing the type parameter entirely, causing a TS parse error
+  const [activeDialog, setActiveDialog] = useState<DialogKind>(null);
 
   const maskedKey = getMaskedApiKey(apiKey);
 
@@ -62,9 +76,10 @@ export default function ApiSettings() {
         setQuota(null);
         return;
       }
-      const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/api/usage`, {
-        headers: { Authorization: `Bearer ${currentKey}` },
-      });
+      const resp = await fetch(
+        `${config.apiBaseUrl.replace(/\/+$/, "")}/api/usage`,
+        { headers: { Authorization: `Bearer ${currentKey}` } }
+      );
       if (!resp.ok) {
         setUsageCount(null);
         setQuota(null);
@@ -82,7 +97,9 @@ export default function ApiSettings() {
     } catch (error) {
       setUsageCount(null);
       setQuota(null);
-      setBannerMessage(getFetchErrorMessage(error, "Unable to load usage from the backend."));
+      setBannerMessage(
+        getFetchErrorMessage(error, "Unable to load usage from the backend.")
+      );
     }
   };
 
@@ -106,7 +123,9 @@ export default function ApiSettings() {
       setScans(Array.isArray(data.scans) ? data.scans : []);
       if (data.apiKey) {
         setUsageCount(
-          typeof data.apiKey.usage_count === "number" ? data.apiKey.usage_count : usageCount ?? null
+          typeof data.apiKey.usage_count === "number"
+            ? data.apiKey.usage_count
+            : usageCount ?? null
         );
         setQuota(
           typeof data.apiKey.quota === "number"
@@ -131,33 +150,40 @@ export default function ApiSettings() {
 
   useEffect(() => {
     if (!apiKey) return undefined;
-    const id = setInterval(() => { refreshAll(); }, 15000);
+    const id = setInterval(() => {
+      refreshAll();
+    }, 15000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
 
-  // ── Admin token ─────────────────────────────────────────────────────────────
-  const getAdminToken = () => import.meta.env.VITE_ADMIN_TOKEN || "dev_admin_token";
+  // ── Admin token ──────────────────────────────────────────────────────────────
+  const getAdminToken = () =>
+    (import.meta as any).env?.VITE_ADMIN_TOKEN || "dev_admin_token";
 
-  // ── Generate new key ────────────────────────────────────────────────────────
+  // ── Generate new key ─────────────────────────────────────────────────────────
   const handleGenerateKey = () => {
     (async () => {
       try {
-        const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/admin/create-key`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-admin-token": getAdminToken(),   // ✅ always sent
-          },
-          body: JSON.stringify({}),
-        });
+        const resp = await fetch(
+          `${config.apiBaseUrl.replace(/\/+$/, "")}/admin/create-key`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-admin-token": getAdminToken(),
+            },
+            body: JSON.stringify({}),
+          }
+        );
         if (!resp.ok) {
           const err = await readJson<{ error?: string; details?: string }>(resp);
-          window.alert(`Create key failed: ${resolveApiError(err, resp.statusText || "Unknown error")}`);
+          window.alert(
+            `Create key failed: ${resolveApiError(err, resp.statusText || "Unknown error")}`
+          );
           return;
         }
         const data = await resp.json();
-        // ✅ Backend returns keyFingerprint, not plaintext — warn the user
         if (!data.plaintext) {
           window.alert(
             "Key created on the backend (fingerprint: " +
@@ -170,12 +196,14 @@ export default function ApiSettings() {
         syncKey(data.plaintext);
         window.alert("New API key created and saved in this browser.");
       } catch {
-        window.alert("Create key request failed — check that the backend is reachable.");
+        window.alert(
+          "Create key request failed — check that the backend is reachable."
+        );
       }
     })();
   };
 
-  // ── Resolve key ID helper ───────────────────────────────────────────────────
+  // ── Resolve key ID helper ────────────────────────────────────────────────────
   const resolveKeyIdFromCurrentKey = async (adminToken: string): Promise<number> => {
     const keys = await fetchAdminKeys(adminToken);
     const fingerprint = await fingerprintKey(apiKey);
@@ -184,19 +212,24 @@ export default function ApiSettings() {
     return match.id;
   };
 
-  // ── Revoke key ──────────────────────────────────────────────────────────────
+  // ── Revoke key ───────────────────────────────────────────────────────────────
   const handleRevokeKey = async (values: Record<string, string>) => {
     const admin = values.adminToken.trim();
     const action = values.action === "delete" ? "delete" : "expire";
     const keyId = await resolveKeyIdFromCurrentKey(admin);
-    const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/admin/revoke-key`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-admin-token": admin },
-      body: JSON.stringify({ keyId, action }),
-    });
+    const resp = await fetch(
+      `${config.apiBaseUrl.replace(/\/+$/, "")}/admin/revoke-key`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-token": admin },
+        body: JSON.stringify({ keyId, action }),
+      }
+    );
     if (!resp.ok) {
       const err = await readJson<{ error?: string; details?: string }>(resp);
-      throw new Error(`Revoke failed: ${resolveApiError(err, resp.statusText || "Unknown error")}`);
+      throw new Error(
+        `Revoke failed: ${resolveApiError(err, resp.statusText || "Unknown error")}`
+      );
     }
     clearApiKeyOverride();
     setApiKey(config.apiKey);
@@ -216,14 +249,18 @@ export default function ApiSettings() {
   };
 
   const refreshUsage = () => loadUsage(apiKey);
-  const refreshAll = () => { void loadUsage(apiKey); void loadScans(apiKey); };
+  const refreshAll = () => {
+    void loadUsage(apiKey);
+    void loadScans(apiKey);
+  };
 
-  // ── Admin key helpers ───────────────────────────────────────────────────────
+  // ── Admin key helpers ────────────────────────────────────────────────────────
   const loadAdminKeys = async (adminToken: string) => {
     try {
-      const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/admin/keys`, {
-        headers: { "x-admin-token": adminToken },
-      });
+      const resp = await fetch(
+        `${config.apiBaseUrl.replace(/\/+$/, "")}/admin/keys`,
+        { headers: { "x-admin-token": adminToken } }
+      );
       if (!resp.ok) {
         setAdminKeys(null);
         setBannerMessage(
@@ -243,9 +280,10 @@ export default function ApiSettings() {
   };
 
   const fetchAdminKeys = async (adminToken: string) => {
-    const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/admin/keys`, {
-      headers: { "x-admin-token": adminToken },
-    });
+    const resp = await fetch(
+      `${config.apiBaseUrl.replace(/\/+$/, "")}/admin/keys`,
+      { headers: { "x-admin-token": adminToken } }
+    );
     if (!resp.ok) {
       const err = await readJson<{ error?: string; details?: string }>(resp);
       throw new Error(
@@ -267,7 +305,7 @@ export default function ApiSettings() {
       .slice(0, 16);
   };
 
-  // ── Dialog submit ───────────────────────────────────────────────────────────
+  // ── Dialog submit ────────────────────────────────────────────────────────────
   const submitDialog = async (values: Record<string, string>) => {
     if (!activeDialog) return;
 
@@ -278,31 +316,48 @@ export default function ApiSettings() {
 
     if (activeDialog.kind === "upgrade") {
       const keyId = await resolveKeyIdFromCurrentKey(values.adminToken);
-      const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/admin/upgrade`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-token": values.adminToken },
-        body: JSON.stringify({ keyId }),
-      });
+      const resp = await fetch(
+        `${config.apiBaseUrl.replace(/\/+$/, "")}/admin/upgrade`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-token": values.adminToken,
+          },
+          body: JSON.stringify({ keyId }),
+        }
+      );
       if (!resp.ok) {
         const err = await readJson<{ error?: string; details?: string }>(resp);
-        throw new Error(`Upgrade failed: ${resolveApiError(err, resp.statusText || "Unknown error")}`);
+        throw new Error(
+          `Upgrade failed: ${resolveApiError(err, resp.statusText || "Unknown error")}`
+        );
       }
-      window.alert("API key upgraded to Research. Refresh usage to see the unlimited status.");
+      window.alert(
+        "API key upgraded to Research. Refresh usage to see the unlimited status."
+      );
       refreshUsage();
       return;
     }
 
     if (activeDialog.kind === "setQuota") {
-      // ✅ Fixed: was using undefined `keyId` variable — now resolves it properly
       const keyId = await resolveKeyIdFromCurrentKey(values.adminToken);
-      const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/admin/set-quota`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-token": values.adminToken },
-        body: JSON.stringify({ keyId, quota: 5 }),
-      });
+      const resp = await fetch(
+        `${config.apiBaseUrl.replace(/\/+$/, "")}/admin/set-quota`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-token": values.adminToken,
+          },
+          body: JSON.stringify({ keyId, quota: 5 }),
+        }
+      );
       if (!resp.ok) {
         const err = await readJson<{ error?: string; details?: string }>(resp);
-        throw new Error(`Set quota failed: ${resolveApiError(err, resp.statusText || "Unknown error")}`);
+        throw new Error(
+          `Set quota failed: ${resolveApiError(err, resp.statusText || "Unknown error")}`
+        );
       }
       window.alert("Quota set to 5 for this key. Refreshing usage.");
       refreshUsage();
@@ -315,11 +370,17 @@ export default function ApiSettings() {
     }
 
     if (activeDialog.kind === "setAllQuota") {
-      const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/admin/set-quota-all`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-token": values.adminToken },
-        body: JSON.stringify({ quota: 5 }),
-      });
+      const resp = await fetch(
+        `${config.apiBaseUrl.replace(/\/+$/, "")}/admin/set-quota-all`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-token": values.adminToken,
+          },
+          body: JSON.stringify({ quota: 5 }),
+        }
+      );
       if (!resp.ok) {
         const err = await readJson<{ error?: string; details?: string }>(resp);
         throw new Error(
@@ -333,11 +394,17 @@ export default function ApiSettings() {
     }
 
     if (activeDialog.kind === "setSingleQuota") {
-      const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/admin/set-quota`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-token": values.adminToken },
-        body: JSON.stringify({ keyId: activeDialog.adminKey.id, quota: 5 }),
-      });
+      const resp = await fetch(
+        `${config.apiBaseUrl.replace(/\/+$/, "")}/admin/set-quota`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-token": values.adminToken,
+          },
+          body: JSON.stringify({ keyId: activeDialog.adminKey.id, quota: 5 }),
+        }
+      );
       if (!resp.ok) {
         const err = await readJson<{ error?: string; details?: string }>(resp);
         throw new Error(
@@ -349,12 +416,18 @@ export default function ApiSettings() {
     }
   };
 
-  // ── Dialog config ───────────────────────────────────────────────────────────
+  // ── Dialog config ────────────────────────────────────────────────────────────
   const dialogFields = (): ActionDialogField[] => {
     if (!activeDialog) return [];
     if (activeDialog.kind === "revoke") {
       return [
-        { name: "adminToken", label: "Admin token", placeholder: "dev_admin_token", type: "password", required: true },
+        {
+          name: "adminToken",
+          label: "Admin token",
+          placeholder: "dev_admin_token",
+          type: "password",
+          required: true,
+        },
         {
           name: "action",
           label: "Revoke mode",
@@ -367,26 +440,74 @@ export default function ApiSettings() {
       ];
     }
     return [
-      { name: "adminToken", label: "Admin token", placeholder: "dev_admin_token", type: "password", required: true },
+      {
+        name: "adminToken",
+        label: "Admin token",
+        placeholder: "dev_admin_token",
+        type: "password",
+        required: true,
+      },
     ];
   };
 
   const dialogMeta = (() => {
     if (!activeDialog) return null;
     switch (activeDialog.kind) {
-      case "revoke":        return { title: "Revoke API key", description: "Choose whether to expire the key or delete it permanently. Scan history stays in MongoDB.", confirmLabel: "Revoke Key", destructive: true };
-      case "upgrade":       return { title: "Upgrade to Research", description: "Enter the admin token to convert this key to unlimited Research access.", confirmLabel: "Upgrade", destructive: false };
-      case "setQuota":      return { title: "Set key quota to 5", description: "Enter the admin token to update this key's quota to 5 scans.", confirmLabel: "Set Quota", destructive: false };
-      case "showKeys":      return { title: "Show all API keys", description: "Enter the admin token to fetch the key list from the backend.", confirmLabel: "Show Keys", destructive: false };
-      case "setAllQuota":   return { title: "Set quota for all keys", description: "Enter the admin token to set every API key to quota 5.", confirmLabel: "Set All", destructive: true };
-      case "setSingleQuota":return { title: `Set quota for ${activeDialog.adminKey?.name || "one key"}`, description: `Enter the admin token to update ${activeDialog.adminKey?.name || "this entry"} (ID #${activeDialog.adminKey?.id}) to quota 5.`, confirmLabel: "Set Quota", destructive: false };
-      default:              return null;
+      case "revoke":
+        return {
+          title: "Revoke API key",
+          description:
+            "Choose whether to expire the key or delete it permanently. Scan history stays in MongoDB.",
+          confirmLabel: "Revoke Key",
+          destructive: true,
+        };
+      case "upgrade":
+        return {
+          title: "Upgrade to Research",
+          description:
+            "Enter the admin token to convert this key to unlimited Research access.",
+          confirmLabel: "Upgrade",
+          destructive: false,
+        };
+      case "setQuota":
+        return {
+          title: "Set key quota to 5",
+          description: "Enter the admin token to update this key's quota to 5 scans.",
+          confirmLabel: "Set Quota",
+          destructive: false,
+        };
+      case "showKeys":
+        return {
+          title: "Show all API keys",
+          description: "Enter the admin token to fetch the key list from the backend.",
+          confirmLabel: "Show Keys",
+          destructive: false,
+        };
+      case "setAllQuota":
+        return {
+          title: "Set quota for all keys",
+          description: "Enter the admin token to set every API key to quota 5.",
+          confirmLabel: "Set All",
+          destructive: true,
+        };
+      case "setSingleQuota":
+        return {
+          title: `Set quota for ${activeDialog.adminKey?.name || "one key"}`,
+          description: `Enter the admin token to update ${
+            activeDialog.adminKey?.name || "this entry"
+          } (ID #${activeDialog.adminKey?.id}) to quota 5.`,
+          confirmLabel: "Set Quota",
+          destructive: false,
+        };
+      default:
+        return null;
     }
   })();
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="p-4 md:p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
+      {/* Hero card */}
       <BentoCard>
         <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
           <div className="space-y-4">
@@ -395,50 +516,73 @@ export default function ApiSettings() {
               Access console
             </div>
             <div>
-              <h1 className="text-2xl md:text-4xl font-bold text-white">API settings and key lifecycle</h1>
+              <h1 className="text-2xl md:text-4xl font-bold text-white">
+                API settings and key lifecycle
+              </h1>
               <p className="mt-3 text-sm md:text-base text-gray-400 max-w-2xl">
-                Change the backend URL, view the active key, generate or revoke a key, and check live usage without digging through multiple screens.
+                Change the backend URL, view the active key, generate or revoke a key,
+                and check live usage without digging through multiple screens.
               </p>
             </div>
             <div className="grid gap-3 md:grid-cols-3">
-              <div className="rounded-xl border border-[#1e2532] bg-[#0B0E14] px-4 py-3 text-sm text-gray-300">Generate a new key for the browser</div>
-              <div className="rounded-xl border border-[#1e2532] bg-[#0B0E14] px-4 py-3 text-sm text-gray-300">Expire or delete the current key</div>
-              <div className="rounded-xl border border-[#1e2532] bg-[#0B0E14] px-4 py-3 text-sm text-gray-300">Usage persists in MongoDB</div>
+              <div className="rounded-xl border border-[#1e2532] bg-[#0B0E14] px-4 py-3 text-sm text-gray-300">
+                Generate a new key for the browser
+              </div>
+              <div className="rounded-xl border border-[#1e2532] bg-[#0B0E14] px-4 py-3 text-sm text-gray-300">
+                Expire or delete the current key
+              </div>
+              <div className="rounded-xl border border-[#1e2532] bg-[#0B0E14] px-4 py-3 text-sm text-gray-300">
+                Usage persists in MongoDB
+              </div>
             </div>
           </div>
           <div className="rounded-2xl border border-[#1e2532] bg-[#0B0E14] p-4 md:p-5 space-y-3">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-gray-400">Current key state</p>
-                <p className="text-sm font-semibold text-white">{apiKey ? (showKey ? "Visible" : "Masked") : "No key loaded"}</p>
+                <p className="text-sm font-semibold text-white">
+                  {apiKey ? (showKey ? "Visible" : "Masked") : "No key loaded"}
+                </p>
               </div>
               <div className="w-10 h-10 rounded-lg bg-[#00A3FF]/10 border border-[#00A3FF]/20 flex items-center justify-center">
                 <KeyStatusIcon />
               </div>
             </div>
             <div className="text-sm text-gray-300 space-y-2">
-              <div className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-[#00FF94]" /> Activated in this app instantly</div>
-              <div className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-[#00FF94]" /> Backend still keeps scan history</div>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-[#00FF94]" /> Activated in this app
+                instantly
+              </div>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-[#00FF94]" /> Backend still keeps scan
+                history
+              </div>
             </div>
           </div>
         </div>
       </BentoCard>
 
+      {/* Banner */}
       {bannerMessage && (
         <div className="rounded-lg border border-[#FFB84D]/20 bg-[#FFB84D]/10 px-4 py-3 text-sm text-[#FFB84D]">
           {bannerMessage}
         </div>
       )}
 
+      {/* Connection + API Key cards */}
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_1fr] gap-6">
         <BentoCard>
           <div className="space-y-4">
             <div>
               <h2 className="text-lg md:text-xl font-bold text-white">Connection</h2>
-              <p className="text-sm text-gray-400">Point the UI at the backend you want to use.</p>
+              <p className="text-sm text-gray-400">
+                Point the UI at the backend you want to use.
+              </p>
             </div>
             <div>
-              <label className="block text-xs md:text-sm font-medium text-gray-300 mb-2">API Base URL</label>
+              <label className="block text-xs md:text-sm font-medium text-gray-300 mb-2">
+                API Base URL
+              </label>
               <div className="flex flex-col sm:flex-row gap-3">
                 <input
                   value={apiBase}
@@ -447,7 +591,6 @@ export default function ApiSettings() {
                 />
                 <button
                   onClick={() => {
-                    // ✅ Fixed: was calling setApiBaseOverride (undefined) — now calls correct import
                     setApiBaseUrlOverride(apiBase);
                     setBaseSaved(true);
                     window.setTimeout(() => setBaseSaved(false), 1500);
@@ -471,7 +614,10 @@ export default function ApiSettings() {
             </div>
             <div className="rounded-lg border border-[#1e2532] bg-[#0B0E14] p-4 text-xs text-gray-400 flex items-start gap-3">
               <Database className="w-4 h-4 text-[#00A3FF] mt-0.5 flex-shrink-0" />
-              <p>Tip: if you switch the backend URL, refresh the usage panel so the key and quota match the new server.</p>
+              <p>
+                Tip: if you switch the backend URL, refresh the usage panel so the key
+                and quota match the new server.
+              </p>
             </div>
           </div>
         </BentoCard>
@@ -480,10 +626,14 @@ export default function ApiSettings() {
           <div className="space-y-4">
             <div>
               <h2 className="text-lg md:text-xl font-bold text-white">API key</h2>
-              <p className="text-sm text-gray-400">The currently active key is shown here and used automatically for audits.</p>
+              <p className="text-sm text-gray-400">
+                The currently active key is shown here and used automatically for audits.
+              </p>
             </div>
             <div>
-              <label className="block text-xs md:text-sm font-medium text-gray-300 mb-2">Active API Key</label>
+              <label className="block text-xs md:text-sm font-medium text-gray-300 mb-2">
+                Active API Key
+              </label>
               <div className="flex gap-3">
                 <div className="flex-1 relative">
                   <input
@@ -493,34 +643,74 @@ export default function ApiSettings() {
                     className="w-full bg-[#0B0E14] border border-[#1e2532] rounded-lg px-3 md:px-4 py-3 pr-20 md:pr-24 text-white font-mono text-xs md:text-sm focus:outline-none focus:border-[#00A3FF] transition-colors"
                   />
                   <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-2">
-                    <button onClick={() => setShowKey((v) => !v)} className="p-2 hover:bg-[#1e2532] rounded-lg transition-colors" title={showKey ? "Hide key" : "Show key"}>
-                      {showKey ? <EyeOff className="w-4 h-4 text-gray-400" /> : <Eye className="w-4 h-4 text-gray-400" />}
+                    <button
+                      onClick={() => setShowKey((v) => !v)}
+                      className="p-2 hover:bg-[#1e2532] rounded-lg transition-colors"
+                      title={showKey ? "Hide key" : "Show key"}
+                    >
+                      {showKey ? (
+                        <EyeOff className="w-4 h-4 text-gray-400" />
+                      ) : (
+                        <Eye className="w-4 h-4 text-gray-400" />
+                      )}
                     </button>
-                    <button onClick={handleCopy} className="p-2 hover:bg-[#1e2532] rounded-lg transition-colors" title="Copy to clipboard">
-                      {copied ? <CheckCircle2 className="w-4 h-4 text-[#00FF94]" /> : <Copy className="w-4 h-4 text-gray-400" />}
+                    <button
+                      onClick={handleCopy}
+                      className="p-2 hover:bg-[#1e2532] rounded-lg transition-colors"
+                      title="Copy to clipboard"
+                    >
+                      {copied ? (
+                        <CheckCircle2 className="w-4 h-4 text-[#00FF94]" />
+                      ) : (
+                        <Copy className="w-4 h-4 text-gray-400" />
+                      )}
                     </button>
                   </div>
                 </div>
               </div>
-              {!apiKey && <div className="text-xs text-[#FFB84D] mt-2">No API key is loaded yet. Click Generate New Key to create one.</div>}
+              {!apiKey && (
+                <div className="text-xs text-[#FFB84D] mt-2">
+                  No API key is loaded yet. Click Generate New Key to create one.
+                </div>
+              )}
               {copied && (
-                <motion.p initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="text-xs text-[#00FF94] mt-2">
+                <motion.p
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-xs text-[#00FF94] mt-2"
+                >
                   API key copied to clipboard.
                 </motion.p>
               )}
             </div>
             <div className="flex flex-col sm:flex-row gap-3">
-              <button onClick={handleGenerateKey} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[#00A3FF]/20 border border-[#00A3FF]/30 text-[#00A3FF] rounded-lg hover:bg-[#00A3FF]/30 transition-colors text-sm">
-                <RefreshCw className="w-4 h-4" /><span>Generate New Key</span>
+              <button
+                onClick={handleGenerateKey}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[#00A3FF]/20 border border-[#00A3FF]/30 text-[#00A3FF] rounded-lg hover:bg-[#00A3FF]/30 transition-colors text-sm"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Generate New Key</span>
               </button>
-              <button onClick={() => setActiveDialog({ kind: "revoke" })} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[#FF4D4D]/20 border border-[#FF4D4D]/30 text-[#FF4D4D] rounded-lg hover:bg-[#FF4D4D]/30 transition-colors text-sm">
-                <Trash2 className="w-4 h-4" /><span>Revoke Key</span>
+              <button
+                onClick={() => setActiveDialog({ kind: "revoke" })}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[#FF4D4D]/20 border border-[#FF4D4D]/30 text-[#FF4D4D] rounded-lg hover:bg-[#FF4D4D]/30 transition-colors text-sm"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Revoke Key</span>
               </button>
-              <button onClick={() => setActiveDialog({ kind: "upgrade" })} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[#00FF94]/20 border border-[#00FF94]/30 text-[#00FF94] rounded-lg hover:bg-[#00FF94]/30 transition-colors text-sm">
-                <ArrowUpRight className="w-4 h-4" /><span>Upgrade to Research</span>
+              <button
+                onClick={() => setActiveDialog({ kind: "upgrade" })}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[#00FF94]/20 border border-[#00FF94]/30 text-[#00FF94] rounded-lg hover:bg-[#00FF94]/30 transition-colors text-sm"
+              >
+                <ArrowUpRight className="w-4 h-4" />
+                <span>Upgrade to Research</span>
               </button>
-              <button onClick={() => setActiveDialog({ kind: "setQuota" })} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[#151921] border border-[#1e2532] text-white rounded-lg hover:bg-[#1e2532] transition-colors text-sm">
-                <CheckCircle2 className="w-4 h-4 text-[#00FF94]" /><span>Set Limit to 5</span>
+              <button
+                onClick={() => setActiveDialog({ kind: "setQuota" })}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[#151921] border border-[#1e2532] text-white rounded-lg hover:bg-[#1e2532] transition-colors text-sm"
+              >
+                <CheckCircle2 className="w-4 h-4 text-[#00FF94]" />
+                <span>Set Limit to 5</span>
               </button>
             </div>
             <div className="rounded-lg border border-[#00A3FF]/20 bg-[#00A3FF]/10 p-3 md:p-4 text-xs text-gray-300">
@@ -530,30 +720,47 @@ export default function ApiSettings() {
         </BentoCard>
       </div>
 
+      {/* Usage & quota card */}
       <BentoCard>
         <div className="space-y-4 md:space-y-6">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h2 className="text-lg md:text-xl font-bold text-white">Usage & quota</h2>
-              <p className="text-sm text-gray-400">Live values from the backend for the currently selected key.</p>
+              <p className="text-sm text-gray-400">
+                Live values from the backend for the currently selected key.
+              </p>
             </div>
-            <button onClick={refreshAll} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-[#151921] border border-[#1e2532] text-white hover:border-[#00A3FF] transition-colors text-sm">
-              <RefreshCw className="w-4 h-4" />Refresh
+            <button
+              onClick={refreshAll}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-[#151921] border border-[#1e2532] text-white hover:border-[#00A3FF] transition-colors text-sm"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Refresh
             </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
             <div className="bg-[#0B0E14] rounded-lg p-4 border border-[#1e2532]">
               <p className="text-xs text-gray-400 mb-1">Scans used</p>
-              <p className="text-xl md:text-2xl font-bold text-white">{usageCount ?? "—"}</p>
+              <p className="text-xl md:text-2xl font-bold text-white">
+                {usageCount ?? "—"}
+              </p>
             </div>
             <div className="bg-[#0B0E14] rounded-lg p-4 border border-[#1e2532]">
               <p className="text-xs text-gray-400 mb-1">Remaining</p>
-              <p className={`text-xl md:text-2xl font-bold ${remaining == null ? "text-gray-300" : "text-[#00FF94]"}`}>{remaining == null ? "—" : remaining}</p>
+              <p
+                className={`text-xl md:text-2xl font-bold ${
+                  remaining == null ? "text-gray-300" : "text-[#00FF94]"
+                }`}
+              >
+                {remaining == null ? "—" : remaining}
+              </p>
             </div>
             <div className="bg-[#0B0E14] rounded-lg p-4 border border-[#1e2532]">
               <p className="text-xs text-gray-400 mb-1">Quota</p>
-              <p className="text-xl md:text-2xl font-bold text-[#00A3FF]">{quota == null ? "—" : quota}</p>
+              <p className="text-xl md:text-2xl font-bold text-[#00A3FF]">
+                {quota == null ? "—" : quota}
+              </p>
             </div>
           </div>
 
@@ -564,16 +771,27 @@ export default function ApiSettings() {
                 <p className="text-xs text-gray-500">Basic tier limit</p>
               </div>
               <div className="text-right">
-                <p className="text-xl md:text-2xl font-bold text-white">{quota == null ? `${usageCount ?? 0} / -` : `${usageCount ?? 0} / ${quota}`}</p>
+                <p className="text-xl md:text-2xl font-bold text-white">
+                  {quota == null
+                    ? `${usageCount ?? 0} / -`
+                    : `${usageCount ?? 0} / ${quota}`}
+                </p>
                 <p className="text-xs text-gray-400">Usage status</p>
               </div>
             </div>
             <div className="h-3 bg-[#1e2532] rounded-full overflow-hidden">
-              <motion.div className="h-full bg-gradient-to-r from-[#00FF94] to-[#00A3FF]" initial={{ width: 0 }} animate={{ width: `${usagePct}%` }} transition={{ duration: 0.8, delay: 0.2, ease: "easeOut" }} />
+              <motion.div
+                className="h-full bg-gradient-to-r from-[#00FF94] to-[#00A3FF]"
+                initial={{ width: 0 }}
+                animate={{ width: `${usagePct}%` }}
+                transition={{ duration: 0.8, delay: 0.2, ease: "easeOut" }}
+              />
             </div>
             <div className="flex justify-between mt-2">
               <span className="text-xs text-gray-500">0</span>
-              <span className="text-xs text-gray-500">{quota == null ? "-" : `${quota} scans`}</span>
+              <span className="text-xs text-gray-500">
+                {quota == null ? "-" : `${quota} scans`}
+              </span>
             </div>
           </div>
 
@@ -584,9 +802,14 @@ export default function ApiSettings() {
             ) : (
               <div className="space-y-2">
                 {scans.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between bg-[#071019] p-2 rounded border border-[#0f1720]">
+                  <div
+                    key={s.id}
+                    className="flex items-center justify-between bg-[#071019] p-2 rounded border border-[#0f1720]"
+                  >
                     <div className="text-xs text-gray-300">{s.host || s.url}</div>
-                    <div className="text-xs text-gray-500">{new Date(s.scannedAt).toLocaleString()}</div>
+                    <div className="text-xs text-gray-500">
+                      {new Date(s.scannedAt).toLocaleString()}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -594,23 +817,56 @@ export default function ApiSettings() {
           </div>
 
           <div className="mt-6">
-            <h3 className="text-sm font-semibold text-white mb-2">Admin: All API keys</h3>
+            <h3 className="text-sm font-semibold text-white mb-2">
+              Admin: All API keys
+            </h3>
             <div className="flex gap-2 mb-3">
-              <button onClick={() => setActiveDialog({ kind: "showKeys" })} className="px-3 py-2 rounded bg-[#151921] border border-[#1e2532] text-sm text-white">Show keys</button>
-              <button onClick={() => setActiveDialog({ kind: "setAllQuota" })} className="px-3 py-2 rounded bg-[#003744] border border-[#0b3942] text-sm text-[#00FF94]">Set All to 5</button>
-              <button onClick={() => setAdminKeys(null)} className="px-3 py-2 rounded bg-[#0B0E14] border border-[#1e2532] text-sm text-gray-400">Hide</button>
+              <button
+                onClick={() => setActiveDialog({ kind: "showKeys" })}
+                className="px-3 py-2 rounded bg-[#151921] border border-[#1e2532] text-sm text-white"
+              >
+                Show keys
+              </button>
+              <button
+                onClick={() => setActiveDialog({ kind: "setAllQuota" })}
+                className="px-3 py-2 rounded bg-[#003744] border border-[#0b3942] text-sm text-[#00FF94]"
+              >
+                Set All to 5
+              </button>
+              <button
+                onClick={() => setAdminKeys(null)}
+                className="px-3 py-2 rounded bg-[#0B0E14] border border-[#1e2532] text-sm text-gray-400"
+              >
+                Hide
+              </button>
             </div>
             {adminKeys == null ? (
               <div className="text-xs text-gray-500">Admin view hidden.</div>
             ) : (
               <div className="space-y-2">
                 {adminKeys.map((k) => (
-                  <div key={k.id} className="flex items-center justify-between bg-[#071019] p-2 rounded border border-[#0f1720]">
-                    <div className="text-xs text-gray-300">{k.name} (#{k.id})</div>
+                  <div
+                    key={k.id}
+                    className="flex items-center justify-between bg-[#071019] p-2 rounded border border-[#0f1720]"
+                  >
+                    <div className="text-xs text-gray-300">
+                      {k.name} (#{k.id})
+                    </div>
                     <div className="flex items-center gap-3">
-                      <div className="text-xs text-gray-400">Used: {k.usage_count ?? 0}</div>
-                      <div className="text-xs text-gray-400">Quota: {k.quota == null ? "-" : k.quota}</div>
-                      <button onClick={() => setActiveDialog({ kind: "setSingleQuota", adminKey: k })} className="px-2 py-1 rounded bg-[#00A3FF]/10 text-xs text-[#00A3FF] border border-[#00A3FF]/20">Set 5</button>
+                      <div className="text-xs text-gray-400">
+                        Used: {k.usage_count ?? 0}
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        Quota: {k.quota == null ? "-" : k.quota}
+                      </div>
+                      <button
+                        onClick={() =>
+                          setActiveDialog({ kind: "setSingleQuota", adminKey: k })
+                        }
+                        className="px-2 py-1 rounded bg-[#00A3FF]/10 text-xs text-[#00A3FF] border border-[#00A3FF]/20"
+                      >
+                        Set 5
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -620,10 +876,13 @@ export default function ApiSettings() {
         </div>
       </BentoCard>
 
+      {/* Action dialog */}
       {dialogMeta && (
         <ActionDialog
           open={activeDialog != null}
-          onOpenChange={(open) => { if (!open) setActiveDialog(null); }}
+          onOpenChange={(open) => {
+            if (!open) setActiveDialog(null);
+          }}
           title={dialogMeta.title}
           description={dialogMeta.description}
           confirmLabel={dialogMeta.confirmLabel}
@@ -633,30 +892,47 @@ export default function ApiSettings() {
         />
       )}
 
+      {/* Plan card */}
       <BentoCard>
         <div className="flex flex-col lg:flex-row items-start justify-between gap-6">
           <div className="flex-1 w-full">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 md:w-12 md:h-12 rounded-lg bg-[#00A3FF]/20 flex items-center justify-center">
-                <div className="w-3 h-3 rounded-full bg-[#00A3FF]"></div>
+                <div className="w-3 h-3 rounded-full bg-[#00A3FF]" />
               </div>
               <div>
-                <h3 className="text-base md:text-lg font-bold text-white">Current plan</h3>
+                <h3 className="text-base md:text-lg font-bold text-white">
+                  Current plan
+                </h3>
                 <p className="text-xs md:text-sm text-gray-400">Basic Tier</p>
               </div>
             </div>
             <div className="space-y-2 mb-6">
-              <div className="flex items-center gap-2 text-xs md:text-sm text-gray-300"><CheckCircle2 className="w-4 h-4 text-[#00A3FF] flex-shrink-0" /><span>5 scans per month</span></div>
-              <div className="flex items-center gap-2 text-xs md:text-sm text-gray-300"><CheckCircle2 className="w-4 h-4 text-[#00A3FF] flex-shrink-0" /><span>Basic vulnerability detection</span></div>
-              <div className="flex items-center gap-2 text-xs md:text-sm text-gray-300"><CheckCircle2 className="w-4 h-4 text-[#00A3FF] flex-shrink-0" /><span>Standard support</span></div>
+              <div className="flex items-center gap-2 text-xs md:text-sm text-gray-300">
+                <CheckCircle2 className="w-4 h-4 text-[#00A3FF] flex-shrink-0" />
+                <span>5 scans per month</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs md:text-sm text-gray-300">
+                <CheckCircle2 className="w-4 h-4 text-[#00A3FF] flex-shrink-0" />
+                <span>Basic vulnerability detection</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs md:text-sm text-gray-300">
+                <CheckCircle2 className="w-4 h-4 text-[#00A3FF] flex-shrink-0" />
+                <span>Standard support</span>
+              </div>
             </div>
-            <button onClick={() => setActiveDialog({ kind: "upgrade" })} className="w-full sm:w-auto px-6 py-2.5 bg-gradient-to-r from-[#00FF94] to-[#00A3FF] text-[#0B0E14] font-bold rounded-lg hover:shadow-lg hover:shadow-[#00FF94]/30 transition-all text-sm md:text-base">
+            <button
+              onClick={() => setActiveDialog({ kind: "upgrade" })}
+              className="w-full sm:w-auto px-6 py-2.5 bg-gradient-to-r from-[#00FF94] to-[#00A3FF] text-[#0B0E14] font-bold rounded-lg hover:shadow-lg hover:shadow-[#00FF94]/30 transition-all text-sm md:text-base"
+            >
               Upgrade to Research Tier
             </button>
           </div>
           <div className="w-full lg:w-auto bg-[#0B0E14] rounded-lg p-4 md:p-6 border border-[#1e2532] text-center lg:min-w-[220px]">
             <p className="text-xs text-gray-400 mb-2">Research Tier</p>
-            <p className="text-2xl md:text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-[#00FF94] to-[#00A3FF]">$49</p>
+            <p className="text-2xl md:text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-[#00FF94] to-[#00A3FF]">
+              $49
+            </p>
             <p className="text-xs text-gray-500 mb-4">/month</p>
             <div className="space-y-1 text-xs text-gray-400">
               <p>• Unlimited scans</p>

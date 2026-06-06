@@ -2,7 +2,7 @@ services:
   - type: web
     name: cryptoguard-backend
     env: node
-    buildCommand: npm install
+    buildCommand: npm install && pip3 install cryptography
     startCommand: node server.js
     envVars:
       - key: MONGODB_URI
@@ -11,7 +11,7 @@ services:
         value: darkmode_pqc
       - key: ADMIN_TOKEN
         sync: false
-      - key: ALLOWED_ORIGINS
-        sync: false
       - key: PORT
         value: 4000
+      - key: PYTHON_BIN
+        value: python3

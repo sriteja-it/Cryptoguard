@@ -21,6 +21,9 @@ const {
   setQuotaForAll,
   setQuotaForApiKeyId,
 } = require('./mongoStore');
+// Replace tryListen call in start() with:
+const PORT = parseInt(process.env.PORT || '4000', 10);
+app.listen(PORT, '0.0.0.0', () => console.log(`Backend running on port ${PORT}`));
 
 function validateAdmin(req, res, next) {
   const token = req.headers['x-admin-token'] || (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
@@ -47,6 +50,7 @@ app.use(express.json({
   },
 }));
 
+<<<<<<< HEAD
 // CORS: use FRONTEND_URL env var in production, fall back to wildcard for dev
 // ── CORS ─────────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = (process.env.FRONTEND_URL || '*')
@@ -64,6 +68,11 @@ app.use((req, res, next) => {
     res.header('Vary', 'Origin');
   }
 
+=======
+// Simple CORS for dev: allow the frontend to call the API
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+>>>>>>> 43d1e02 (Updated frontend and backend)
   res.header(
     'Access-Control-Allow-Headers',
     'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Admin-Token'
@@ -297,22 +306,34 @@ app.post('/api/audit', validateApiKey, applyRateLimit, async (req, res) => {
     const storedScan = await insertScan(scan);
 
     // increment usage
-    const usageUpdate = await incrementApiKeyUsage(req.apiKeyEntry.id);
-    const updatedApiKey = usageUpdate.value || req.apiKeyEntry;
+    // BUG FIX: MongoDB driver v5+ returns the document directly from findOneAndUpdate,
+    // not wrapped in { value: doc }. Using usageUpdate directly.
+    const updatedApiKey = await incrementApiKeyUsage(req.apiKeyEntry.id) || req.apiKeyEntry;
 
-    res.json({ scan: storedScan, analysis, usage: { count: updatedApiKey.usage_count ?? 0, quota: updatedApiKey.quota ?? null } });
+    return res.json({ scan: storedScan, analysis, usage: { count: updatedApiKey.usage_count ?? 0, quota: updatedApiKey.quota ?? null } });
   });
 });
 
-const PORT = parseInt(process.env.PORT || '4000', 10);
+const START_PORT = parseInt(process.env.PORT || '4000', 10);
+const MAX_TRIES = 11;
 
-function startListening() {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Backend running on port ${PORT}`);
-  }).on('error', (err) => {
-    console.error('Failed to bind port:', err);
-    process.exit(1);
-  });
+function tryListen(startPort, tries) {
+  let attempt = 0;
+  function listenNext() {
+    const p = startPort + attempt;
+    const server = app.listen(p, () => console.log(`Backend running on http://localhost:${p}`));
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE' && attempt < tries - 1) {
+        attempt += 1;
+        console.warn(`Port ${p} in use, trying ${startPort + attempt}...`);
+        setTimeout(listenNext, 200);
+      } else {
+        console.error('Failed to bind port', err);
+        process.exit(1);
+      }
+    });
+  }
+  listenNext();
 }
 
 // Admin: upgrade API key to unlimited quota
@@ -355,11 +376,12 @@ app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) =>
     };
 
     await database.collection('api_keys').insertOne(doc);
-    // Do not return plaintext in API responses. Return key metadata and fingerprint only.
+    // BUG FIX: Return plaintext exactly once at creation time so the client can save it.
+    // The hash is never exposed; the plaintext is only sent in this response and never stored.
     const keyFingerprint = hashed.slice(0, 16);
     const safeDoc = { ...doc };
     delete safeDoc.hashed_key;
-    return res.json({ ok: true, apiKey: safeDoc, keyFingerprint });
+    return res.json({ ok: true, apiKey: safeDoc, keyFingerprint, plaintext });
   } catch (error) {
     console.error('create_key_failed', error);
     return res.status(500).json({ error: 'create_key_failed' });
@@ -423,30 +445,28 @@ app.post('/admin/revoke-key', validateAdmin, express.json(), async (req, res) =>
 });
 
 async function start() {
-  // Start HTTP server first so Render's health check passes immediately
-  startListening();
-
   const MAX_RETRIES = 5;
   let attempt = 0;
   while (attempt <= MAX_RETRIES) {
     try {
       await connectMongo();
       console.log('MongoDB connected');
+      // Ensure all existing keys have a default quota of 5
       try {
         await setQuotaForAll(5);
         console.log('Applied default quota=5 to all API keys');
       } catch (e) {
         console.warn('Could not apply default quota to all keys:', e && e.message ? e.message : e);
       }
+      tryListen(START_PORT, MAX_TRIES);
       return;
     } catch (error) {
       attempt += 1;
       const delay = Math.min(16000, 1000 * Math.pow(2, attempt - 1));
       console.error(`MongoDB connection attempt ${attempt} failed:`, error.message || error);
       if (attempt > MAX_RETRIES) {
-        // Log the error but do NOT exit — server stays up so Render doesn't restart loop
-        console.error('Exceeded MongoDB connection retries. Running without DB.');
-        return;
+        console.error('Exceeded MongoDB connection retries. Exiting.');
+        process.exit(1);
       }
       console.log(`Retrying MongoDB connection in ${delay}ms...`);
       // eslint-disable-next-line no-await-in-loop

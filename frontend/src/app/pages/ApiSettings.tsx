@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+<<<<<<< HEAD
 import {
   Copy,
   RefreshCw,
@@ -11,6 +12,9 @@ import {
   Eye,
   EyeOff,
 } from "lucide-react";
+=======
+import { Copy, RefreshCw, Trash2, CheckCircle2, Shield, ArrowUpRight, Database, Globe, Eye, EyeOff, Key } from "lucide-react";
+>>>>>>> 43d1e02 (Updated frontend and backend)
 import BentoCard from "../components/BentoCard";
 import ActionDialog, { ActionDialogField } from "../components/ActionDialog";
 import { motion } from "motion/react";
@@ -25,6 +29,7 @@ import {
 } from "../../utils/config";
 import { getFetchErrorMessage, readJson, resolveApiError } from "../../utils/api";
 
+<<<<<<< HEAD
 // ── Dialog kind union ─────────────────────────────────────────────────────────
 type DialogKind =
   | { kind: "revoke" }
@@ -34,6 +39,12 @@ type DialogKind =
   | { kind: "setAllQuota" }
   | { kind: "setSingleQuota"; adminKey: any }
   | null;
+=======
+// Fallback component for the missing KeyStatusIcon layout block
+function KeyStatusIcon() {
+  return <Key className="w-5 h-5 text-[#00A3FF]" />;
+}
+>>>>>>> 43d1e02 (Updated frontend and backend)
 
 export default function ApiSettings() {
   const [showKey, setShowKey] = useState(false);
@@ -161,7 +172,21 @@ export default function ApiSettings() {
   const getAdminToken = () =>
     (import.meta as any).env?.VITE_ADMIN_TOKEN || "dev_admin_token";
 
+<<<<<<< HEAD
   // ── Generate new key ─────────────────────────────────────────────────────────
+=======
+  // Helper utility to fetch internal database keys list for resolving identifiers
+  const resolveKeyIdFromCurrentKey = async (adminToken: string) => {
+    const freshKeys = await fetchAdminKeys(adminToken);
+    const currentFingerprint = await fingerprintKey(apiKey);
+    const matchingKey = freshKeys.find((k: any) => k.keyFingerprint === currentFingerprint);
+    if (!matchingKey) {
+      throw new Error("Could not find database record identity matches for this client session.");
+    }
+    return matchingKey.id;
+  };
+
+>>>>>>> 43d1e02 (Updated frontend and backend)
   const handleGenerateKey = () => {
     (async () => {
       try {
@@ -341,6 +366,7 @@ export default function ApiSettings() {
     }
 
     if (activeDialog.kind === "setQuota") {
+<<<<<<< HEAD
       const keyId = await resolveKeyIdFromCurrentKey(values.adminToken);
       const resp = await fetch(
         `${config.apiBaseUrl.replace(/\/+$/, "")}/admin/set-quota`,
@@ -353,6 +379,20 @@ export default function ApiSettings() {
           body: JSON.stringify({ keyId, quota: 5 }),
         }
       );
+=======
+      const adminKeysList = adminKeys ?? (await fetchAdminKeys(values.adminToken));
+      const currentFingerprint = await fingerprintKey(apiKey);
+      const matchingKey = (adminKeysList ?? []).find((k) => k.keyFingerprint === currentFingerprint);
+      if (!matchingKey) {
+        throw new Error("Could not match the current key to an admin key ID. Refresh the key list and try again.");
+      }
+
+      const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/admin/set-quota`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-token": values.adminToken },
+        body: JSON.stringify({ keyId: matchingKey.id, quota: 5 }), // Fixed undefined variable crash
+      });
+>>>>>>> 43d1e02 (Updated frontend and backend)
       if (!resp.ok) {
         const err = await readJson<{ error?: string; details?: string }>(resp);
         throw new Error(
@@ -591,7 +631,11 @@ export default function ApiSettings() {
                 />
                 <button
                   onClick={() => {
+<<<<<<< HEAD
                     setApiBaseUrlOverride(apiBase);
+=======
+                    setApiBaseUrlOverride(apiBase); // Fixed structural configuration save argument bug
+>>>>>>> 43d1e02 (Updated frontend and backend)
                     setBaseSaved(true);
                     window.setTimeout(() => setBaseSaved(false), 1500);
                   }}
@@ -748,6 +792,7 @@ export default function ApiSettings() {
             </div>
             <div className="bg-[#0B0E14] rounded-lg p-4 border border-[#1e2532]">
               <p className="text-xs text-gray-400 mb-1">Remaining</p>
+<<<<<<< HEAD
               <p
                 className={`text-xl md:text-2xl font-bold ${
                   remaining == null ? "text-gray-300" : "text-[#00FF94]"
@@ -761,6 +806,13 @@ export default function ApiSettings() {
               <p className="text-xl md:text-2xl font-bold text-[#00A3FF]">
                 {quota == null ? "—" : quota}
               </p>
+=======
+              <p className={`text-xl md:text-2xl font-bold ${remaining == null ? 'text-gray-300' : 'text-[#00FF94]'}`}>{remaining == null ? '—' : remaining}</p>
+            </div>
+            <div className="bg-[#0B0E14] rounded-lg p-4 border border-[#1e2532]">
+              <p className="text-xs text-gray-400 mb-1">Quota</p>
+              <p className="text-xl md:text-2xl font-bold text-[#00A3FF]">{quota == null ? '—' : quota}</p>
+>>>>>>> 43d1e02 (Updated frontend and backend)
             </div>
           </div>
 
@@ -801,11 +853,17 @@ export default function ApiSettings() {
               <div className="text-xs text-gray-500">No recent scans available.</div>
             ) : (
               <div className="space-y-2">
+<<<<<<< HEAD
                 {scans.map((s) => (
                   <div
                     key={s.id}
                     className="flex items-center justify-between bg-[#071019] p-2 rounded border border-[#0f1720]"
                   >
+=======
+                {scans.map((s, index) => (
+                  // Fixed warning unique loop tracking key identifier mapping fallback sequence
+                  <div key={s.id || s._id || index} className="flex items-center justify-between bg-[#071019] p-2 rounded border border-[#0f1720]">
+>>>>>>> 43d1e02 (Updated frontend and backend)
                     <div className="text-xs text-gray-300">{s.host || s.url}</div>
                     <div className="text-xs text-gray-500">
                       {new Date(s.scannedAt).toLocaleString()}
@@ -844,6 +902,7 @@ export default function ApiSettings() {
               <div className="text-xs text-gray-500">Admin view hidden.</div>
             ) : (
               <div className="space-y-2">
+<<<<<<< HEAD
                 {adminKeys.map((k) => (
                   <div
                     key={k.id}
@@ -852,6 +911,12 @@ export default function ApiSettings() {
                     <div className="text-xs text-gray-300">
                       {k.name} (#{k.id})
                     </div>
+=======
+                {adminKeys.map((k, index) => (
+                  // Fixed warning unique loop tracking key identifier mapping fallback sequence
+                  <div key={k.id || k._id || index} className="flex items-center justify-between bg-[#071019] p-2 rounded border border-[#0f1720]">
+                    <div className="text-xs text-gray-300">{k.name} (#{k.id})</div>
+>>>>>>> 43d1e02 (Updated frontend and backend)
                     <div className="flex items-center gap-3">
                       <div className="text-xs text-gray-400">
                         Used: {k.usage_count ?? 0}
@@ -928,6 +993,7 @@ export default function ApiSettings() {
               Upgrade to Research Tier
             </button>
           </div>
+<<<<<<< HEAD
           <div className="w-full lg:w-auto bg-[#0B0E14] rounded-lg p-4 md:p-6 border border-[#1e2532] text-center lg:min-w-[220px]">
             <p className="text-xs text-gray-400 mb-2">Research Tier</p>
             <p className="text-2xl md:text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-[#00FF94] to-[#00A3FF]">
@@ -941,12 +1007,18 @@ export default function ApiSettings() {
               <p>• Custom reports</p>
             </div>
           </div>
+=======
+>>>>>>> 43d1e02 (Updated frontend and backend)
         </div>
       </BentoCard>
     </div>
   );
+<<<<<<< HEAD
 }
 
 function KeyStatusIcon() {
   return <Shield className="w-5 h-5 text-[#00A3FF]" />;
 }
+=======
+}
+>>>>>>> 43d1e02 (Updated frontend and backend)

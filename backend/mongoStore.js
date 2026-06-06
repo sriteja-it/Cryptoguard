@@ -9,6 +9,7 @@ const SCANS_FILE = path.join(DATA_DIR, 'scan_history.json');
 
 let client;
 let db;
+let connectionPromise = null;
 
 function readJsonFile(filePath, fallback) {
   try {
@@ -68,19 +69,31 @@ async function resetFromLegacyData() {
 }
 
 async function connectMongo() {
-  if (db) {
+  if (db) return db;
+  if (connectionPromise) return connectionPromise;
+
+  connectionPromise = (async () => {
+    // BUG FIX #1: Validate MONGODB_URI before attempting connection to give a clear error
+    const uri = process.env.MONGODB_URI;
+    if (!uri) {
+      throw new Error('MONGODB_URI environment variable is not set. Please create a .env file with MONGODB_URI=<your-connection-string>');
+    }
+
+    const dbName = process.env.MONGODB_DB_NAME || 'darkmode_pqc';
+    client = new MongoClient(uri);
+    await client.connect();
+    db = client.db(dbName);
+    await ensureIndexes(db);
+    await seedLegacyData(db);
     return db;
+  })();
+
+  try {
+    return await connectionPromise;
+  } catch (err) {
+    connectionPromise = null;
+    throw err;
   }
-
-  const uri = process.env.MONGODB_URI || process.env.MONGO_URL || 'mongodb://127.0.0.1:27017';
-
-  const dbName = process.env.MONGODB_DB_NAME || 'darkmode_pqc';
-  client = new MongoClient(uri);
-  await client.connect();
-  db = client.db(dbName);
-  await ensureIndexes(db);
-  await seedLegacyData(db);
-  return db;
 }
 
 async function getApiKeyByHash(hashedKey) {
@@ -90,23 +103,28 @@ async function getApiKeyByHash(hashedKey) {
 
 async function incrementApiKeyUsage(apiKeyId) {
   const database = await connectMongo();
-  const result = await database.collection('api_keys').findOneAndUpdate(
+  return database.collection('api_keys').findOneAndUpdate(
     { id: apiKeyId },
     { $inc: { usage_count: 1 } },
-    { returnDocument: 'after' },
+    { returnDocument: 'after' }
   );
-  return result.value ?? result;
 }
 
 async function getNextScanId() {
   const database = await connectMongo();
-  return (await database.collection('scan_history').countDocuments()) + 1;
+  const lastScan = await database.collection('scan_history')
+    .findOne({}, { sort: { id: -1 }, projection: { id: 1 } });
+  return lastScan && typeof lastScan.id === 'number' ? lastScan.id + 1 : 1;
 }
 
+// BUG FIX #2: MongoDB driver v5+ does NOT support sort/limit as find() options.
+// Must use .sort() and .limit() method chaining instead.
 async function getRecentScans(limit = 10) {
   const database = await connectMongo();
   return database.collection('scan_history')
-    .find({}, { sort: { scannedAt: -1 }, limit })
+    .find({})
+    .sort({ scannedAt: -1 })
+    .limit(limit)
     .toArray();
 }
 
@@ -122,9 +140,7 @@ async function deleteScanById(scanId, apiKeyId) {
   if (!Number.isFinite(id)) return { deletedCount: 0, reason: 'invalid_scan_id' };
 
   const filter = { id };
-  if (apiKeyId != null) {
-    filter.apiKeyId = apiKeyId;
-  }
+  if (apiKeyId != null) filter.apiKeyId = apiKeyId;
 
   const result = await database.collection('scan_history').deleteOne(filter);
   return { deletedCount: result.deletedCount };
@@ -144,6 +160,7 @@ async function closeMongo() {
     await client.close();
     client = undefined;
     db = undefined;
+    connectionPromise = null;
   }
 }
 
@@ -152,12 +169,11 @@ async function setApiKeyUnlimitedById(apiKeyId) {
   const id = Number(apiKeyId);
   if (!Number.isFinite(id)) throw new Error('invalid_api_key_id');
 
-  const res = await database.collection('api_keys').findOneAndUpdate(
+  return database.collection('api_keys').findOneAndUpdate(
     { id },
     { $set: { quota: null } },
-    { returnDocument: 'after' },
+    { returnDocument: 'after' }
   );
-  return res.value ?? null;
 }
 
 async function revokeApiKeyById(apiKeyId, action = 'expire') {
@@ -170,22 +186,26 @@ async function revokeApiKeyById(apiKeyId, action = 'expire') {
     return { deletedCount: r.deletedCount, revoked: false, doc: null };
   }
 
-  const r = await database.collection('api_keys').findOneAndUpdate(
+  const updatedDoc = await database.collection('api_keys').findOneAndUpdate(
     { id },
     { $set: { expires_at: new Date().toISOString() } },
     { returnDocument: 'after' }
   );
-
-  return { deletedCount: 0, revoked: !!r.value, doc: r.value };
+  return { deletedCount: 0, revoked: !!updatedDoc, doc: updatedDoc };
 }
 
+// BUG FIX #3: Projection { hashed_key: 1 } only returns hashed_key and _id — 
+// this caused name, id, quota, usage_count to be missing from admin key list.
+// Changed to { hashed_key: 0 } to exclude hashed_key and return all other fields.
 async function listApiKeys() {
   const database = await connectMongo();
-  const keys = await database.collection('api_keys').find({}, { projection: { hashed_key: 1 } }).toArray();
+  const keys = await database.collection('api_keys')
+    .find({}, { projection: { hashed_key: 0 } })
+    .toArray();
   return keys.map((key) => ({
     ...key,
     keyFingerprint: typeof key.hashed_key === 'string' ? key.hashed_key.slice(0, 16) : null,
-  })).map(({ hashed_key, ...rest }) => rest);
+  }));
 }
 
 async function setQuotaForAll(q) {
@@ -203,13 +223,11 @@ async function setQuotaForApiKeyId(apiKeyId, q) {
   if (!Number.isFinite(id)) throw new Error('invalid_api_key_id');
   if (!Number.isFinite(quota) || quota < 0) throw new Error('invalid_quota');
 
-  const r = await database.collection('api_keys').findOneAndUpdate(
+  return database.collection('api_keys').findOneAndUpdate(
     { id },
     { $set: { quota } },
-    { returnDocument: 'after' },
+    { returnDocument: 'after' }
   );
-
-  return r.value ?? null;
 }
 
 module.exports = {

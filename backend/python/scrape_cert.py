@@ -38,7 +38,7 @@ def public_key_details(public_key):
     if isinstance(public_key, ed25519.Ed25519PublicKey):
         return 'ED25519', 256
     if isinstance(public_key, ed448.Ed448PublicKey):
-        return 'ED448', 456
+        return 'ED448', 448
     return type(public_key).__name__.replace('PublicKey', '').upper(), getattr(public_key, 'key_size', None)
 
 

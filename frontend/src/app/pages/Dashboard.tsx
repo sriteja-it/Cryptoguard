@@ -145,6 +145,10 @@ export default function Dashboard() {
   }, [result]);
 
   const scores = useMemo(() => {
+<<<<<<< HEAD
+=======
+    // BUG FIX: classicalScore and quantumScore live under analysis.breakdown, not analysis directly
+>>>>>>> 43d1e02 (Updated frontend and backend)
     const backendVuln = Number.isFinite(Number(result?.analysis?.vulnerabilityScore)) ? Number(result?.analysis?.vulnerabilityScore) : null;
     const backendQuantum = Number.isFinite(Number(result?.analysis?.breakdown?.quantumScore)) ? Number(result?.analysis?.breakdown?.quantumScore) : null;
     const backendClassical = Number.isFinite(Number(result?.analysis?.breakdown?.classicalScore)) ? Number(result?.analysis?.breakdown?.classicalScore) : null;
@@ -348,6 +352,7 @@ export default function Dashboard() {
             <BentoCard delay={0} className="col-span-1 md:col-span-2">
               <div className="flex items-start justify-between mb-4">
                 <div>
+<<<<<<< HEAD
                   <p className="text-gray-400 text-xs md:text-sm mb-1">Certificate details</p>
                   <h3 className="text-xl md:text-2xl font-bold text-white break-all">{subject}</h3>
                 </div>
@@ -384,6 +389,14 @@ export default function Dashboard() {
                 <div>
                   <p className="text-gray-400 text-xs md:text-sm mb-1">Public key algorithm</p>
                   <h3 className="text-xl md:text-2xl font-bold text-white">{algo}{keySize ? `-${keySize}` : ""}</h3>
+=======
+                  <p className="text-gray-400 text-xs md:text-sm mb-1">Detected algorithm</p>
+                  <h3 className="text-xl md:text-2xl font-bold text-white">
+                    {result?.scan?.certInfo?.publicKeyType
+                      ? `${result.scan.certInfo.publicKeyType}${result.scan.certInfo.publicKeySize ? `-${result.scan.certInfo.publicKeySize}` : ""}`
+                      : "Unknown"}
+                  </h3>
+>>>>>>> 43d1e02 (Updated frontend and backend)
                 </div>
                 <div className="w-10 h-10 md:w-12 md:h-12 rounded-lg bg-[#FF4D4D]/20 flex items-center justify-center">
                   <Key className="w-5 h-5 md:w-6 md:h-6 text-[#FF4D4D]" />
@@ -397,7 +410,11 @@ export default function Dashboard() {
               <div className="flex items-start justify-between mb-4">
                 <div>
                   <p className="text-gray-400 text-xs md:text-sm mb-1">Key strength</p>
+<<<<<<< HEAD
                   <h3 className="text-xl md:text-2xl font-bold text-white">{keySize ? `${keySize}-bit` : "Unknown"}</h3>
+=======
+                  <h3 className="text-xl md:text-2xl font-bold text-white">{result?.scan?.certInfo?.publicKeySize ? `${result.scan.certInfo.publicKeySize}-bit` : "Unknown"}</h3>
+>>>>>>> 43d1e02 (Updated frontend and backend)
                 </div>
                 <div className="w-10 h-10 md:w-12 md:h-12 rounded-lg bg-[#00A3FF]/20 flex items-center justify-center">
                   <Shield className="w-5 h-5 md:w-6 md:h-6 text-[#00A3FF]" />
@@ -464,11 +481,19 @@ export default function Dashboard() {
                     <div className="flex items-center justify-center gap-3">
                       <div className="px-3 py-1 bg-[#0B0E14] border border-[#1e2532] rounded-md">
                         <div className="text-xs text-gray-400">Classical</div>
+<<<<<<< HEAD
                         <div className="text-sm font-bold text-[#00FF94]">{classicalScore}%</div>
                       </div>
                       <div className="px-3 py-1 bg-[#0B0E14] border border-[#1e2532] rounded-md">
                         <div className="text-xs text-gray-400">Quantum urgency</div>
                         <div className="text-sm font-bold" style={{ color: riskColor }}>{quantumScore}%</div>
+=======
+                        <div className="text-sm font-bold text-[#00FF94]">{result?.analysis?.breakdown?.classicalScore ?? scores.classical}%</div>
+                      </div>
+                      <div className="px-3 py-1 bg-[#0B0E14] border border-[#1e2532] rounded-md">
+                        <div className="text-xs text-gray-400">Quantum urgency</div>
+                        <div className="text-sm font-bold text-[#FF4D4D]">{result?.analysis?.breakdown?.quantumScore ?? scores.quantum}%</div>
+>>>>>>> 43d1e02 (Updated frontend and backend)
                       </div>
                     </div>
                     <div className="mt-2 text-xs text-gray-400">Score for: {subject}</div>

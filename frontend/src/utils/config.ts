@@ -117,3 +117,17 @@ export const config = {
 };
 
 export default config;
+<<<<<<< HEAD
+=======
+
+/**
+ * Gets the masked version of API key for display
+ */
+export const getMaskedApiKey = (apiKey: string): string => {
+  if (!apiKey) return 'No key loaded';
+  if (apiKey.length < 8) return '••••••••';
+  const visiblePart = apiKey.substring(0, 8);
+  const hiddenPart = '•'.repeat(apiKey.length - 8);
+  return `${visiblePart}${hiddenPart}`;
+};
+>>>>>>> 43d1e02 (Updated frontend and backend)

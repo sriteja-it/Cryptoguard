@@ -21,10 +21,17 @@ const {
   setQuotaForAll,
   setQuotaForApiKeyId,
 } = require('./mongoStore');
-// Replace tryListen call in start() with:
-const PORT = parseInt(process.env.PORT || '4000', 10);
-app.listen(PORT, '0.0.0.0', () => console.log(`Backend running on port ${PORT}`));
 
+const START_PORT = parseInt(process.env.PORT || '4000', 10);
+const MAX_TRIES = 11;
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX = 20;
+const rateState = new Map();
+
+// Instantiate App before attaching middleware, routes, or listening
+const app = express();
+
+// Admin verification middleware
 function validateAdmin(req, res, next) {
   const token = req.headers['x-admin-token'] || (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
   const adminToken = process.env.ADMIN_TOKEN || 'dev_admin_token';
@@ -34,12 +41,7 @@ function validateAdmin(req, res, next) {
   return next();
 }
 
-const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMIT_MAX = 20;
-const rateState = new Map();
-
-const app = express();
-// capture raw request body for debugging (keeps JSON parsing)
+// Global raw body capture helper along with JSON parsing
 app.use(express.json({
   verify: (req, _res, buf) => {
     try {
@@ -50,9 +52,7 @@ app.use(express.json({
   },
 }));
 
-<<<<<<< HEAD
-// CORS: use FRONTEND_URL env var in production, fall back to wildcard for dev
-// ── CORS ─────────────────────────────────────────────────────────────────────
+// ── CORS Configuration ────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = (process.env.FRONTEND_URL || '*')
   .split(',')
   .map(o => o.trim().replace(/\/$/, ''))
@@ -68,17 +68,15 @@ app.use((req, res, next) => {
     res.header('Vary', 'Origin');
   }
 
-=======
-// Simple CORS for dev: allow the frontend to call the API
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
->>>>>>> 43d1e02 (Updated frontend and backend)
   res.header(
     'Access-Control-Allow-Headers',
     'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Admin-Token'
   );
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
   next();
 });
 
@@ -89,6 +87,23 @@ function getClientIp(req) {
     return forwarded.split(',')[0].trim();
   }
   return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function resolvePythonExecutable() {
+  const candidates = [
+    process.env.PYTHON_BIN,
+    path.resolve(__dirname, '..', '.venv', 'Scripts', 'python.exe'),
+    path.resolve(__dirname, '..', '.venv', 'bin', 'python'),
+    'python',
+    'python3',
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (candidate === 'python' || candidate === 'python3' || fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return 'python';
 }
 
 // ── Rate limiter ──────────────────────────────────────────────────────────────
@@ -116,25 +131,7 @@ function applyRateLimit(req, res, next) {
       windowSeconds: RATE_LIMIT_WINDOW_MS / 1000,
     });
   }
-
   next();
-}
-function resolvePythonExecutable() {
-  const candidates = [
-    process.env.PYTHON_BIN,
-    path.resolve(__dirname, '..', '.venv', 'Scripts', 'python.exe'),
-    path.resolve(__dirname, '..', '.venv', 'bin', 'python'),
-    'python',
-    'python3',
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    if (candidate === 'python' || candidate === 'python3' || fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return 'python';
 }
 
 function validateApiKey(req, res, next) {
@@ -182,7 +179,6 @@ function validateApiKeyWithoutQuota(req, res, next) {
     });
 }
 
-// Try to validate API key but don't fail the request if missing/invalid.
 function tryValidateApiKey(req) {
   return new Promise((resolve) => {
     const auth = req.headers['authorization'] || '';
@@ -200,15 +196,14 @@ function tryValidateApiKey(req) {
   });
 }
 
+// ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 app.get('/api/scans', async (req, res) => {
   try {
-    // allow public read-only access to recent scans if API key is missing/expired
     const entry = await tryValidateApiKey(req);
     const limit = Math.min(parseInt(req.query.limit || '10', 10) || 10, 50);
     const scans = await getRecentScans(limit);
-    // attach apiKeyInfo when a valid key is present (for UI usage info)
     if (entry) {
       return res.json({ scans, apiKey: { id: entry.id, usage_count: entry.usage_count ?? 0, quota: entry.quota ?? null } });
     }
@@ -228,7 +223,6 @@ app.delete('/api/scans/:id', validateApiKeyWithoutQuota, async (req, res) => {
     if (result.deletedCount === 0) {
       return res.status(404).json({ error: 'scan_not_found' });
     }
-
     return res.json({ ok: true, deletedCount: result.deletedCount });
   } catch (error) {
     console.error('scan_delete_failed', error);
@@ -246,7 +240,6 @@ app.delete('/api/scans', validateApiKeyWithoutQuota, async (req, res) => {
   }
 });
 
-// Return usage/quota for the authenticated API key
 app.get('/api/usage', validateApiKey, async (req, res) => {
   try {
     const entry = req.apiKeyEntry;
@@ -257,12 +250,10 @@ app.get('/api/usage', validateApiKey, async (req, res) => {
   }
 });
 
-// POST /api/audit
 app.post('/api/audit', validateApiKey, applyRateLimit, async (req, res) => {
   const { url } = req.body || {};
   if (!url) return res.status(400).json({ error: 'missing_url' });
 
-  // call python scraper
   const scriptPath = path.join(__dirname, 'python', 'scrape_cert.py');
   const host = url.replace(/^https?:\/\//, '').split('/')[0];
   const pythonBin = resolvePythonExecutable();
@@ -291,8 +282,6 @@ app.post('/api/audit', validateApiKey, applyRateLimit, async (req, res) => {
     }
 
     const analysis = riskEngine.analyze(certInfo);
-
-    // store scan
     const scanId = await getNextScanId();
     const scan = {
       id: scanId,
@@ -304,40 +293,14 @@ app.post('/api/audit', validateApiKey, applyRateLimit, async (req, res) => {
       apiKeyId: req.apiKeyEntry.id,
     };
     const storedScan = await insertScan(scan);
-
-    // increment usage
-    // BUG FIX: MongoDB driver v5+ returns the document directly from findOneAndUpdate,
-    // not wrapped in { value: doc }. Using usageUpdate directly.
     const updatedApiKey = await incrementApiKeyUsage(req.apiKeyEntry.id) || req.apiKeyEntry;
 
     return res.json({ scan: storedScan, analysis, usage: { count: updatedApiKey.usage_count ?? 0, quota: updatedApiKey.quota ?? null } });
   });
 });
 
-const START_PORT = parseInt(process.env.PORT || '4000', 10);
-const MAX_TRIES = 11;
-
-function tryListen(startPort, tries) {
-  let attempt = 0;
-  function listenNext() {
-    const p = startPort + attempt;
-    const server = app.listen(p, () => console.log(`Backend running on http://localhost:${p}`));
-    server.on('error', (err) => {
-      if (err.code === 'EADDRINUSE' && attempt < tries - 1) {
-        attempt += 1;
-        console.warn(`Port ${p} in use, trying ${startPort + attempt}...`);
-        setTimeout(listenNext, 200);
-      } else {
-        console.error('Failed to bind port', err);
-        process.exit(1);
-      }
-    });
-  }
-  listenNext();
-}
-
-// Admin: upgrade API key to unlimited quota
-app.post('/admin/upgrade', validateAdmin, express.json(), async (req, res) => {
+// ── Admin Routes ──────────────────────────────────────────────────────────────
+app.post('/admin/upgrade', validateAdmin, async (req, res) => {
   try {
     const { keyId } = req.body || {};
     if (keyId == null) return res.status(400).json({ error: 'missing_keyId' });
@@ -350,18 +313,14 @@ app.post('/admin/upgrade', validateAdmin, express.json(), async (req, res) => {
   }
 });
 
-// Admin: create a new API key (returns plaintext key)
-app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) => {
+app.post('/admin/create-key', validateAdmin, async (req, res) => {
   try {
     const { plain, name, quota } = req.body || {};
     const plaintext = plain || `pqc_${crypto.randomBytes(12).toString('hex')}`;
     const hashed = crypto.createHash('sha256').update(plaintext).digest('hex');
     const database = await connectMongo();
 
-    // generate unique id
     let id = Math.floor(Math.random() * 1000000) + 100;
-    // ensure uniqueness
-    // eslint-disable-next-line no-await-in-loop
     while (await database.collection('api_keys').findOne({ id })) {
       id = Math.floor(Math.random() * 1000000) + 100;
     }
@@ -376,8 +335,6 @@ app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) =>
     };
 
     await database.collection('api_keys').insertOne(doc);
-    // BUG FIX: Return plaintext exactly once at creation time so the client can save it.
-    // The hash is never exposed; the plaintext is only sent in this response and never stored.
     const keyFingerprint = hashed.slice(0, 16);
     const safeDoc = { ...doc };
     delete safeDoc.hashed_key;
@@ -388,14 +345,12 @@ app.post('/admin/create-key', validateAdmin, express.json(), async (req, res) =>
   }
 });
 
-// Admin: set quota for a key by key ID
-app.post('/admin/set-quota', validateAdmin, express.json(), async (req, res) => {
+app.post('/admin/set-quota', validateAdmin, async (req, res) => {
   try {
     const { keyId, quota } = req.body || {};
     if (quota == null) return res.status(400).json({ error: 'missing_quota' });
     const q = Number(quota);
     if (!Number.isFinite(q) || q < 0) return res.status(400).json({ error: 'invalid_quota' });
-
     if (keyId == null) return res.status(400).json({ error: 'missing_keyId' });
 
     const updated = await setQuotaForApiKeyId(keyId, quota);
@@ -407,7 +362,6 @@ app.post('/admin/set-quota', validateAdmin, express.json(), async (req, res) => 
   }
 });
 
-// Admin: list all API keys (no hashed_key included)
 app.get('/admin/keys', validateAdmin, async (req, res) => {
   try {
     const all = await listApiKeys();
@@ -418,8 +372,7 @@ app.get('/admin/keys', validateAdmin, async (req, res) => {
   }
 });
 
-// Admin: set quota for all API keys to a specific value
-app.post('/admin/set-quota-all', validateAdmin, express.json(), async (req, res) => {
+app.post('/admin/set-quota-all', validateAdmin, async (req, res) => {
   try {
     const { quota } = req.body || {};
     if (quota == null) return res.status(400).json({ error: 'missing_quota' });
@@ -431,8 +384,7 @@ app.post('/admin/set-quota-all', validateAdmin, express.json(), async (req, res)
   }
 });
 
-// Admin: revoke or delete a key by key ID
-app.post('/admin/revoke-key', validateAdmin, express.json(), async (req, res) => {
+app.post('/admin/revoke-key', validateAdmin, async (req, res) => {
   try {
     const { keyId, action } = req.body || {};
     if (keyId == null) return res.status(400).json({ error: 'missing_keyId' });
@@ -444,6 +396,26 @@ app.post('/admin/revoke-key', validateAdmin, express.json(), async (req, res) =>
   }
 });
 
+// ── Networking Port Strategy ──────────────────────────────────────────────────
+function tryListen(startPort, tries) {
+  let attempt = 0;
+  function listenNext() {
+    const p = startPort + attempt;
+    const server = app.listen(p, '0.0.0.0', () => console.log(`Backend running on http://localhost:${p}`));
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE' && attempt < tries - 1) {
+        attempt += 1;
+        console.warn(`Port ${p} in use, trying ${startPort + attempt}...`);
+        setTimeout(listenNext, 200);
+      } else {
+        console.error('Failed to bind port', err);
+        process.exit(1);
+      }
+    });
+  }
+  listenNext();
+}
+
 async function start() {
   const MAX_RETRIES = 5;
   let attempt = 0;
@@ -451,7 +423,6 @@ async function start() {
     try {
       await connectMongo();
       console.log('MongoDB connected');
-      // Ensure all existing keys have a default quota of 5
       try {
         await setQuotaForAll(5);
         console.log('Applied default quota=5 to all API keys');
@@ -469,12 +440,12 @@ async function start() {
         process.exit(1);
       }
       console.log(`Retrying MongoDB connection in ${delay}ms...`);
-      // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }
 
+// ── System Shutdown Listeners ──────────────────────────────────────────────────
 process.on('SIGINT', async () => {
   await closeMongo();
   process.exit(0);
